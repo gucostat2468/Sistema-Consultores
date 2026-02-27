@@ -13,6 +13,14 @@
       Fluxo focado em consulta por empresa. Se o arquivo vier sem consultor, o sistema classifica automaticamente em
       carteira geral para manter a leitura operacional.
     </p>
+    <p>
+      <strong>Mesclar:</strong> adiciona/atualiza sem limpar a base. <strong>Substituir base:</strong> usa o novo
+      report como foto completa e remove dados anteriores antes da importacao.
+    </p>
+    <p>
+      <strong>Limpar dados:</strong> remove toda a base operacional para recomecar do zero. Acao restrita ao
+      <strong>adm</strong>.
+    </p>
   </section>
 
   <section class="card mapping-card">
@@ -50,11 +58,18 @@
 
     <div class="actions">
       <button type="button" class="ghost" (click)="clearFile()">Limpar arquivo</button>
-      <button type="button" [disabled]="loading()" (click)="execute()">
+      <button type="button" [disabled]="busy()" (click)="execute(false)">
         @if (loading()) {
           Processando...
         } @else {
-          Atualizar via padrao Report
+          Atualizar (mesclar)
+        }
+      </button>
+      <button type="button" class="danger" [disabled]="busy()" (click)="execute(true)">
+        @if (loading()) {
+          Processando...
+        } @else {
+          Substituir base com este report
         }
       </button>
     </div>
@@ -64,9 +79,30 @@
     }
   </section>
 
+  <section class="card reset-card">
+    <h3>Limpeza total da base</h3>
+    <p>
+      Remove clientes, titulos, limites e historico de ingestao para iniciar do zero.
+    </p>
+    <button type="button" class="danger" [disabled]="busy()" (click)="clearAllData()">
+      @if (clearLoading()) {
+        Limpando base...
+      } @else {
+        Limpar todos os dados do sistema
+      }
+    </button>
+  </section>
+
   @if (response(); as result) {
     <section class="card result">
       <h3>{{ result.message }}</h3>
+      <p class="mode-chip" [class.mode-chip-danger]="replaceBaseMode()">
+        @if (replaceBaseMode()) {
+          Modo aplicado: substituicao completa da base pelo report enviado.
+        } @else {
+          Modo aplicado: mescla (atualiza e adiciona sem limpeza geral).
+        }
+      </p>
       @if (result.operationId || result.processedAt) {
         <div class="meta">
           @if (result.operationId) {
@@ -117,6 +153,38 @@
           </ul>
         </div>
       }
+    </section>
+  }
+
+  @if (clearResponse(); as clean) {
+    <section class="card result clean-result">
+      <h3>{{ clean.message }}</h3>
+      <div class="meta">
+        @if (clean.operationId) {
+          <p><strong>Protocolo:</strong> {{ clean.operationId }}</p>
+        }
+        @if (clean.processedAt) {
+          <p><strong>Processado em:</strong> {{ clean.processedAt }}</p>
+        }
+      </div>
+      <section class="audit-grid">
+        <article class="audit-card">
+          <p>Titulos removidos</p>
+          <strong>{{ clean.removed.receivables }}</strong>
+        </article>
+        <article class="audit-card">
+          <p>Limites removidos</p>
+          <strong>{{ clean.removed.creditLimits }}</strong>
+        </article>
+        <article class="audit-card">
+          <p>Clientes removidos</p>
+          <strong>{{ clean.removed.customers }}</strong>
+        </article>
+        <article class="audit-card">
+          <p>Consultores removidos</p>
+          <strong>{{ clean.removed.consultantsRemoved }}</strong>
+        </article>
+      </section>
     </section>
   }
 }

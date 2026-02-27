@@ -29,6 +29,7 @@ from src.db import (
     list_ingestion_batches,
     list_consultants,
     register_ingestion_file,
+    reset_operational_data,
     save_import_format_profile,
     stage_credit_limit_records,
     stage_receivables_records,
@@ -1339,19 +1340,52 @@ def admin_import(
     )
 
 
+@app.post("/api/admin/clear-data")
+def admin_clear_data(
+    actorUsername: str = Form(default="adm"),
+    removeConsultants: str = Form(default="true"),
+    authorization: str | None = Header(default=None),
+) -> dict:
+    user = get_current_user_from_header(authorization)
+    if not user.is_admin or user.username.lower() != "adm":
+        raise HTTPException(status_code=403, detail="Somente o usuario adm pode limpar a base.")
+
+    if str(actorUsername).strip().lower() != "adm":
+        raise HTTPException(status_code=400, detail="Actor invalido para limpeza da base.")
+
+    operation_id = f"CLR-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
+    processed_at = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    removed = reset_operational_data(remove_non_admin_consultants=to_bool(removeConsultants))
+
+    for token, current_user in list(TOKEN_STORE.items()):
+        if not current_user.is_admin:
+            TOKEN_STORE.pop(token, None)
+
+    return {
+        "success": True,
+        "message": "Base limpa com sucesso.",
+        "operationId": operation_id,
+        "processedAt": processed_at,
+        "removed": removed,
+    }
+
+
 @app.post("/api/admin/import-report-v1")
 def admin_import_report_v1(
     excel: UploadFile | None = File(default=None),
+    replaceBase: str = Form(default="false"),
     actorUsername: str = Form(default="adm"),
     authorization: str | None = Header(default=None),
 ) -> dict:
     if not excel:
         raise HTTPException(status_code=400, detail="Selecione o arquivo report.")
 
+    append_mode = "false" if to_bool(replaceBase) else "true"
+
     return admin_import(
         mode="update",
         strictVendors="false",
-        appendMode="true",
+        appendMode=append_mode,
         allowSkippedLines=0,
         allowSkippedCreditRows=0,
         inputProfile="report_v1",

@@ -44,3 +44,19 @@ export interface AdminImportResponse {
   operationId?: string;
   processedAt?: string;
 }
+
+export interface AdminClearDataResponse {
+  success: boolean;
+  message: string;
+  operationId?: string;
+  processedAt?: string;
+  removed: {
+    receivables: number;
+    creditLimits: number;
+    customers: number;
+    consultantLinks: number;
+    ingestionBatches: number;
+    importProfiles: number;
+    consultantsRemoved: number;
+  };
+}

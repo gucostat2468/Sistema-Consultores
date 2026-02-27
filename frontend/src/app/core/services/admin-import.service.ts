@@ -2,7 +2,11 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable, throwError } from 'rxjs';
 import { environment } from '../../../environments/environment';
-import { AdminImportRequest, AdminImportResponse } from '../models/admin-import.models';
+import {
+  AdminClearDataResponse,
+  AdminImportRequest,
+  AdminImportResponse
+} from '../models/admin-import.models';
 import { AuthService } from './auth.service';
 
 @Injectable({ providedIn: 'root' })
@@ -47,7 +51,7 @@ export class AdminImportService {
     return this.http.post<AdminImportResponse>(`${environment.apiBaseUrl}/admin/import`, formData);
   }
 
-  executeReportV1(excelFile: File): Observable<AdminImportResponse> {
+  executeReportV1(excelFile: File, replaceBase = false): Observable<AdminImportResponse> {
     if (!this.isAdmUser()) {
       return throwError(() => new Error('Acesso negado. Somente o usuário adm pode importar arquivos.'));
     }
@@ -64,11 +68,33 @@ export class AdminImportService {
     const formData = new FormData();
     formData.append('excel', excelFile, excelFile.name);
     formData.append('actorUsername', 'adm');
+    formData.append('replaceBase', String(replaceBase));
 
     return this.http.post<AdminImportResponse>(
       `${environment.apiBaseUrl}/admin/import-report-v1`,
       formData
     );
+  }
+
+  clearData(removeConsultants = true): Observable<AdminClearDataResponse> {
+    if (!this.isAdmUser()) {
+      return throwError(() => new Error('Acesso negado. Somente o usuário adm pode limpar dados.'));
+    }
+
+    if (environment.useMockApi) {
+      return throwError(
+        () =>
+          new Error(
+            'Modo simulado ativo (useMockApi=true). A limpeza nao e real. Defina useMockApi=false para operar no backend.'
+          )
+      );
+    }
+
+    const formData = new FormData();
+    formData.append('actorUsername', 'adm');
+    formData.append('removeConsultants', String(removeConsultants));
+
+    return this.http.post<AdminClearDataResponse>(`${environment.apiBaseUrl}/admin/clear-data`, formData);
   }
 
   isAdmUser(): boolean {

@@ -1162,6 +1162,41 @@ def list_ingestion_batches(limit: int = 20) -> list[dict]:
     return payload
 
 
+def reset_operational_data(*, remove_non_admin_consultants: bool = True) -> dict:
+    with get_connection() as conn:
+        receivables_count = int(conn.execute("SELECT COUNT(*) FROM receivables").fetchone()[0])
+        credit_limits_count = int(conn.execute("SELECT COUNT(*) FROM credit_limits").fetchone()[0])
+        customers_count = int(conn.execute("SELECT COUNT(*) FROM customers").fetchone()[0])
+        consultant_links_count = int(conn.execute("SELECT COUNT(*) FROM consultant_customers").fetchone()[0])
+        ingestion_batches_count = int(conn.execute("SELECT COUNT(*) FROM ingestion_batches").fetchone()[0])
+        import_profiles_count = int(conn.execute("SELECT COUNT(*) FROM import_format_profiles").fetchone()[0])
+        non_admin_consultants_count = int(
+            conn.execute("SELECT COUNT(*) FROM consultants WHERE is_admin = 0").fetchone()[0]
+        )
+
+        conn.execute("DELETE FROM receivables")
+        conn.execute("DELETE FROM consultant_customers")
+        conn.execute("DELETE FROM customers")
+        conn.execute("DELETE FROM credit_limits")
+        conn.execute("DELETE FROM import_format_profiles")
+        conn.execute("DELETE FROM ingestion_batches")
+
+        consultants_removed = 0
+        if remove_non_admin_consultants:
+            conn.execute("DELETE FROM consultants WHERE is_admin = 0")
+            consultants_removed = non_admin_consultants_count
+
+    return {
+        "receivables": receivables_count,
+        "creditLimits": credit_limits_count,
+        "customers": customers_count,
+        "consultantLinks": consultant_links_count,
+        "ingestionBatches": ingestion_batches_count,
+        "importProfiles": import_profiles_count,
+        "consultantsRemoved": consultants_removed,
+    }
+
+
 def get_or_create_consultant(
     *,
     conn: sqlite3.Connection,
