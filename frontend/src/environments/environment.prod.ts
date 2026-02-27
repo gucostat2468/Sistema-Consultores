@@ -1,6 +1,6 @@
 export const environment = {
   production: true,
   appName: 'DronePro Consultores',
-  apiBaseUrl: 'http://localhost:8000/api',
+  apiBaseUrl: '/api',
   useMockApi: false
 };

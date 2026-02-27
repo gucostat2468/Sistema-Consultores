@@ -12,6 +12,7 @@ import uuid
 import pandas as pd
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from src.db import (
     AuthenticatedUser,
@@ -60,6 +61,17 @@ TOKEN_STORE: dict[str, AuthenticatedUser] = {}
 CUSTOMER_NAME_CORRECTIONS = {
     "AGRODRONE SOLU ES AGRICOLAS LTDA": "AGRODRONE SOLUCOES AGRICOLAS LTDA",
 }
+
+BASE_DIR = Path(__file__).resolve().parent
+FRONTEND_DIST_CANDIDATES = [
+    BASE_DIR / "frontend" / "dist" / "frontend" / "browser",
+    BASE_DIR / "frontend" / "dist" / "frontend",
+]
+FRONTEND_DIST_DIR = next(
+    (path for path in FRONTEND_DIST_CANDIDATES if path.exists()),
+    FRONTEND_DIST_CANDIDATES[0],
+)
+FRONTEND_INDEX_FILE = FRONTEND_DIST_DIR / "index.html"
 
 
 def to_bool(value: str | bool) -> bool:
@@ -552,6 +564,22 @@ def parse_upload_temp(upload: UploadFile, suffix: str) -> Path:
         content = upload.file.read()
         tmp.write(content)
         return Path(tmp.name)
+
+
+def resolve_frontend_file(path: str) -> Path | None:
+    if not FRONTEND_DIST_DIR.exists():
+        return None
+
+    requested = (FRONTEND_DIST_DIR / path).resolve()
+    dist_root = FRONTEND_DIST_DIR.resolve()
+    try:
+        requested.relative_to(dist_root)
+    except ValueError:
+        return None
+
+    if not requested.is_file():
+        return None
+    return requested
 
 
 app = FastAPI(title="DronePro API", version="1.0.0")
@@ -1332,3 +1360,25 @@ def admin_import_report_v1(
         excel=excel,
         authorization=authorization,
     )
+
+
+@app.get("/", include_in_schema=False)
+def frontend_root() -> FileResponse | dict:
+    if FRONTEND_INDEX_FILE.is_file():
+        return FileResponse(FRONTEND_INDEX_FILE)
+    return {"ok": True, "service": "dronepro-api", "frontend": "not-built"}
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+def frontend_spa_or_asset(full_path: str):
+    if full_path == "api" or full_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="Rota nao encontrada.")
+
+    static_file = resolve_frontend_file(full_path)
+    if static_file is not None:
+        return FileResponse(static_file)
+
+    if FRONTEND_INDEX_FILE.is_file():
+        return FileResponse(FRONTEND_INDEX_FILE)
+
+    raise HTTPException(status_code=404, detail="Rota nao encontrada.")

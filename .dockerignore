@@ -1,0 +1,13 @@
+.git
+.venv
+.vscode
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+data
+
+frontend/node_modules
+frontend/.angular
+frontend/dist

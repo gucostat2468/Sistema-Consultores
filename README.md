@@ -31,6 +31,15 @@ Rodar API:
 python -m uvicorn api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
+## Deploy no Render com Docker
+
+O projeto agora está preparado para subir como **Web Service Docker** no Render com backend + frontend no mesmo container.
+
+- O `Dockerfile` faz build do Angular e sobe a API FastAPI via `uvicorn`.
+- Em produção, o frontend usa `apiBaseUrl: '/api'` (mesmo domínio do Render).
+- A API também serve o build estático do Angular (incluindo fallback de rotas SPA).
+- Health check recomendado no Render: `/api/health`.
+
 ## Validação e atualização de dados (PDF + Excel)
 
 Agora o sistema valida formato antes de atualizar dados, tanto para:
