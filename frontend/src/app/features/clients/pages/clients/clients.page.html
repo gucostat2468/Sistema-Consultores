@@ -1,0 +1,59 @@
+<section class="filters card">
+  <label>
+    Buscar cliente
+    <input [ngModel]="search()" (ngModelChange)="setSearch($event)" placeholder="nome ou codigo" />
+  </label>
+
+  <label>
+    Situacao
+    <select [ngModel]="statusFilter()" (ngModelChange)="setStatus($event)">
+      <option value="Todos">Todos</option>
+      <option value="Saudavel">Saudavel</option>
+      <option value="Atencao">Atencao</option>
+      <option value="Critico">Critico</option>
+    </select>
+  </label>
+</section>
+
+<section class="card table-card">
+  @if (loading()) {
+    <p class="state">Carregando clientes...</p>
+  } @else if (filtered.length === 0) {
+    <p class="state">Nenhum cliente encontrado para os filtros atuais.</p>
+  } @else {
+    <div class="table-head">
+      <span>Cliente</span>
+      <span>Limite credito</span>
+      <span>Divida aberta</span>
+      <span>Vencido</span>
+      <span>Vence 7 dias</span>
+      <span>Score</span>
+      <span>Situacao</span>
+      <span>Analise</span>
+      <span>Acao</span>
+    </div>
+    @for (client of filtered; track buildClientKey(client)) {
+      <div class="table-row">
+        <div>
+          <strong>{{ client.customerName }}</strong>
+          <p>{{ client.customerCode }}</p>
+        </div>
+        <span>{{ currency(clientCreditLimit(client)) }}</span>
+        <strong>{{ currency(client.totalBalance) }}</strong>
+        <span>{{ currency(client.overdue) }}</span>
+        <span>{{ currency(client.due7) }}</span>
+        <span>{{ client.score }}</span>
+        <span [class]="badgeClass(client.status)">{{ client.status }}</span>
+        <a
+          class="analysis-link"
+          [routerLink]="['/app/analise-cliente']"
+          [queryParams]="analysisQuery(client)"
+          (click)="rememberContext()"
+        >
+          Ver graficos
+        </a>
+        <p>{{ client.action }}</p>
+      </div>
+    }
+  }
+</section>

@@ -1,0 +1,47 @@
+<section class="login-screen">
+  <div class="hero">
+    <p class="eyebrow">Sistema Financeiro de Consultores</p>
+    <h1>Decisao comercial guiada por risco real da carteira.</h1>
+    <p class="subtitle">
+      Visual moderno, leitura imediata de saude financeira e isolamento total entre os 7 consultores.
+    </p>
+    <div class="chip-grid">
+      <span class="chip">Carteira isolada por login</span>
+      <span class="chip">Painel de risco acionavel</span>
+      <span class="chip">Vencimentos em tempo real</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Acesso seguro</h2>
+    <p class="panel-subtitle">Entre com seu usuario para visualizar somente sua carteira.</p>
+
+    <form [formGroup]="form" (ngSubmit)="submit()" class="form">
+      <label>
+        Usuario
+        <input type="text" formControlName="username" placeholder="nome.sobrenome" autocomplete="username" />
+      </label>
+
+      <label>
+        Senha
+        <input type="password" formControlName="password" placeholder="********" autocomplete="current-password" />
+      </label>
+
+      @if (errorMessage()) {
+        <p class="error">{{ errorMessage() }}</p>
+      }
+
+      <button type="submit" [disabled]="loading()">
+        @if (loading()) {
+          Entrando...
+        } @else {
+          Entrar no painel
+        }
+      </button>
+    </form>
+
+    <div class="hint">
+      <p><strong>Consultores:</strong> usuario individual + senha Consultor@123</p>
+    </div>
+  </div>
+</section>

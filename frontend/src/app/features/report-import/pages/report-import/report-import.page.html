@@ -1,0 +1,122 @@
+@if (!isAdmUser) {
+  <section class="card state state-error">
+    <p>Area restrita. Somente o usuário <strong>adm</strong> pode importar arquivos.</p>
+  </section>
+} @else {
+  <section class="card intro">
+    <h2>Atualizacao Report (padrao fixo)</h2>
+    <p>
+      Use esta tela somente para planilhas no padrao:
+      <strong>vencimento | NF | Cliente | valor parcela</strong>.
+    </p>
+    <p>
+      Fluxo focado em consulta por empresa. Se o arquivo vier sem consultor, o sistema classifica automaticamente em
+      carteira geral para manter a leitura operacional.
+    </p>
+  </section>
+
+  <section class="card mapping-card">
+    <h3>Variaveis obrigatorias (fixas)</h3>
+    <div class="mapping-grid">
+      <article>
+        <p class="k">vencimento</p>
+        <p class="v">Data de vencimento do titulo</p>
+      </article>
+      <article>
+        <p class="k">NF</p>
+        <p class="v">Documento + parcela (ex.: NT:59204 3/5)</p>
+      </article>
+      <article>
+        <p class="k">Cliente</p>
+        <p class="v">Razao social da empresa</p>
+      </article>
+      <article>
+        <p class="k">valor parcela</p>
+        <p class="v">Valor financeiro da parcela</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="card form-card">
+    <label>
+      Arquivo report (.xls, .xlsx, .xlsm)
+      <input
+        type="file"
+        accept=".xls,.xlsx,.xlsm,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel.sheet.macroEnabled.12"
+        (change)="setReportFile($event)"
+      />
+      <span class="file-name">{{ excelFile()?.name || 'nenhum arquivo selecionado' }}</span>
+    </label>
+
+    <div class="actions">
+      <button type="button" class="ghost" (click)="clearFile()">Limpar arquivo</button>
+      <button type="button" [disabled]="loading()" (click)="execute()">
+        @if (loading()) {
+          Processando...
+        } @else {
+          Atualizar via padrao Report
+        }
+      </button>
+    </div>
+
+    @if (errorMessage()) {
+      <p class="error">{{ errorMessage() }}</p>
+    }
+  </section>
+
+  @if (response(); as result) {
+    <section class="card result">
+      <h3>{{ result.message }}</h3>
+      @if (result.operationId || result.processedAt) {
+        <div class="meta">
+          @if (result.operationId) {
+            <p><strong>Protocolo:</strong> {{ result.operationId }}</p>
+          }
+          @if (result.processedAt) {
+            <p><strong>Processado em:</strong> {{ result.processedAt }}</p>
+          }
+        </div>
+      }
+
+      @if (result.audit; as audit) {
+        <section class="audit-grid">
+          <article class="audit-card">
+            <p>Clientes novos</p>
+            <strong>{{ audit.newCustomers ?? 0 }}</strong>
+          </article>
+          <article class="audit-card">
+            <p>Titulos novos</p>
+            <strong>{{ audit.newTitles ?? 0 }}</strong>
+          </article>
+          <article class="audit-card">
+            <p>Titulos atualizados</p>
+            <strong>{{ audit.updatedTitles ?? 0 }}</strong>
+          </article>
+          <article class="audit-card" [class.audit-card-error]="audit.errors > 0">
+            <p>Erros</p>
+            <strong>{{ audit.errors }}</strong>
+          </article>
+        </section>
+      }
+
+      @if (result.auditLog?.length) {
+        <div class="audit-actions">
+          <button type="button" class="ghost" (click)="downloadAuditLog()">
+            Baixar log da importacao
+          </button>
+        </div>
+      }
+
+      @if (result.warnings.length > 0) {
+        <div class="warnings">
+          <strong>Avisos</strong>
+          <ul>
+            @for (warning of result.warnings; track warning) {
+              <li>{{ warning }}</li>
+            }
+          </ul>
+        </div>
+      }
+    </section>
+  }
+}

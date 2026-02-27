@@ -1,0 +1,205 @@
+@if (loading()) {
+  <section class="state">
+    <p>Carregando painel financeiro...</p>
+  </section>
+} @else if (error()) {
+  <section class="state state-error">
+    <p>{{ error() }}</p>
+  </section>
+} @else {
+  @if (summary(); as metrics) {
+    <section class="export-bar card">
+      <div>
+        <h3>Relatório completo da carteira</h3>
+        <p>Exporta PDF com dashboards, extrato de boletos atrasados/a vencer e saldo disponível por cliente.</p>
+      </div>
+      <button type="button" (click)="exportPortfolioPdf()">Exportar PDF completo</button>
+    </section>
+    @if (exportError()) {
+      <section class="state state-error">
+        <p>{{ exportError() }}</p>
+      </section>
+    }
+
+    <section class="kpi-grid">
+      <article class="kpi">
+        <p>Saldo em aberto</p>
+        <h3>{{ currency(metrics.totalBalance) }}</h3>
+      </article>
+      <article class="kpi">
+        <p>Vence em 7 dias</p>
+        <h3>{{ currency(metrics.due7) }}</h3>
+      </article>
+      <article class="kpi">
+        <p>Vence em 30 dias</p>
+        <h3>{{ currency(metrics.due30) }}</h3>
+      </article>
+      <article class="kpi">
+        <p>Saldo vencido</p>
+        <h3>{{ currency(metrics.overdue) }}</h3>
+      </article>
+      <article class="kpi">
+        <p>Clientes / Titulos</p>
+        <h3>{{ metrics.clients }} / {{ metrics.titles }}</h3>
+      </article>
+    </section>
+
+    <section class="strategy">
+      <article class="card guidance">
+        <h3>Leitura estrategica</h3>
+        <p>{{ metrics.guidance }}</p>
+        <div class="chip-row">
+          <span class="chip">Risco atual: {{ percent(metrics.overdueRatio) }}</span>
+          <span class="chip">Pressao 7 dias: {{ percent(metrics.due7Ratio) }}</span>
+        </div>
+      </article>
+
+      <article class="card distribution">
+        <h3>Distribuicao de carteira</h3>
+        @for (item of statusDistribution(); track item.label) {
+          <div class="distribution-row">
+            <p>{{ item.label }}</p>
+            <div class="bar">
+              <span [style.width.%]="item.ratio * 100"></span>
+            </div>
+            <strong>{{ item.value }}</strong>
+          </div>
+        }
+      </article>
+    </section>
+
+    <section class="card credit-section">
+      <header>
+        <h3>Recebiveis x limite de credito</h3>
+        <p>Cruzamento real entre exposicao de titulos e limite disponivel por cliente.</p>
+      </header>
+
+      @if (creditSummary(); as credit) {
+        <div class="credit-kpi-grid">
+          <article class="credit-kpi">
+            <p>Limite total</p>
+            <strong>{{ currency(credit.totalLimit) }}</strong>
+          </article>
+          <article class="credit-kpi">
+            <p>Utilizado</p>
+            <strong>{{ currency(credit.totalUsed) }}</strong>
+            <span>{{ percent(credit.usageRatio) }}</span>
+          </article>
+          <article class="credit-kpi">
+            <p>Disponivel</p>
+            <strong>{{ currency(credit.totalAvailable) }}</strong>
+          </article>
+          <article class="credit-kpi">
+            <p>Exposicao coberta</p>
+            <strong>{{ currency(credit.totalExposure) }}</strong>
+          </article>
+          <article class="credit-kpi">
+            <p>Sem limite mapeado</p>
+            <strong>{{ currency(credit.uncoveredExposure) }}</strong>
+          </article>
+          <article class="credit-kpi">
+            <p>Cobertura</p>
+            <strong>{{ percent(credit.coverageRatio) }}</strong>
+          </article>
+        </div>
+
+        @if (topCreditCross.length === 0) {
+          <p class="empty">Sem clientes com limite de credito no escopo atual.</p>
+        } @else {
+          <div class="credit-table">
+            <div class="credit-head">
+              <span>Cliente</span>
+              <span>Exposicao</span>
+              <span>Disponivel</span>
+              <span>Exposicao/Disponivel</span>
+              <span>Alerta</span>
+            </div>
+            @for (item of topCreditCross; track item.consultantId + '::' + (item.customerCode ?? item.customerName)) {
+              <div class="credit-row">
+                <div>
+                  <strong>{{ item.customerName }}</strong>
+                  <p>{{ item.consultantName }}</p>
+                </div>
+                <strong>{{ currency(item.exposure) }}</strong>
+                <strong>{{ currency(item.creditAvailable) }}</strong>
+                <strong>{{ percent(item.exposureToAvailableRatio) }}</strong>
+                <span [class]="creditAlertClass(item.alert)">{{ creditAlertLabel(item.alert) }}</span>
+              </div>
+            }
+          </div>
+        }
+      } @else {
+        <p class="empty">Sem dados de limite de credito para o escopo atual.</p>
+      }
+    </section>
+
+    <section class="panels">
+      <article class="card">
+        <header>
+          <h3>Clientes de maior exposicao</h3>
+          <p>Priorize relacionamento e revisao de limite</p>
+        </header>
+        <div class="table">
+          @for (client of topClients; track client.consultantId + '::' + client.customerCode) {
+            <div class="row">
+              <div>
+                <strong>{{ client.customerName }}</strong>
+                <p>{{ client.customerCode }}</p>
+              </div>
+              <div>
+                <span [class]="badgeClass(client.status)">{{ client.status }}</span>
+              </div>
+              <div>
+                <strong>{{ currency(client.totalBalance) }}</strong>
+                <p>score {{ client.score }}</p>
+              </div>
+            </div>
+          }
+        </div>
+      </article>
+
+      <article class="card">
+        <header>
+          <h3>Acoes prioritarias</h3>
+          <p>Clientes sob maior risco financeiro</p>
+        </header>
+        <div class="action-list">
+          @if (criticalClients.length === 0) {
+            <p class="empty">Nenhum cliente em alerta no momento.</p>
+          } @else {
+            @for (client of criticalClients; track client.consultantId + '::' + client.customerCode) {
+              <div class="action-item">
+                <div>
+                  <strong>{{ client.customerName }}</strong>
+                  <p>{{ client.action }}</p>
+                </div>
+                <span [class]="badgeClass(client.status)">{{ client.status }}</span>
+              </div>
+            }
+          }
+        </div>
+      </article>
+    </section>
+
+    <section class="card">
+      <header>
+        <h3>Linha do tempo de vencimentos</h3>
+        <p>Visao operacional para contatos diarios</p>
+      </header>
+      <div class="timeline">
+        @for (item of nextDue; track item.id) {
+          <div class="timeline-item" [class]="urgencyClass(item)">
+            <div class="left">
+              <strong>{{ item.customerName }}</strong>
+              <p>{{ item.documentRef }} | Parcela {{ item.installment }}</p>
+            </div>
+            <div class="right">
+              <strong>{{ currency(item.balance) }}</strong>
+              <p [class]="dueToneTextClass(item)">{{ date(item.dueDate) }} - {{ dueLabel(item) }}</p>
+            </div>
+          </div>
+        }
+      </div>
+    </section>
+  }
+}

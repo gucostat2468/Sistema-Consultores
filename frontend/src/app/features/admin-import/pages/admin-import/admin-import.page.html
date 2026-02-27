@@ -1,0 +1,169 @@
+@if (!isAdmUser) {
+  <section class="card state state-error">
+    <p>Area restrita. Somente o usuário <strong>adm</strong> pode importar arquivos.</p>
+  </section>
+} @else {
+  <section class="card intro">
+    <h2>Atualização de Dados (ADM)</h2>
+    <p>
+      Importe PDF e/ou Excel para atualizar toda a base. Esta operação é exclusiva do usuário
+      <strong>adm</strong>.
+    </p>
+  </section>
+
+  <section class="card form-card">
+    <form [formGroup]="form" (ngSubmit)="execute()">
+      <div class="grid">
+        <label>
+          Arquivos de atualização (PDF, Excel ou CSV)
+          <input
+            type="file"
+            multiple
+            accept=".pdf,.xlsx,.xls,.xlsm,.csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/vnd.ms-excel.sheet.macroEnabled.12,text/csv"
+            (change)="setUpdateFiles($event)"
+          />
+          <span class="file-name">PDF: {{ pdfFile()?.name || 'não selecionado' }}</span>
+          <span class="file-name">Planilha: {{ excelFile()?.name || 'não selecionada' }}</span>
+        </label>
+
+        <label>
+          Remover arquivos selecionados
+          <div class="inline-actions">
+            <button type="button" class="ghost" (click)="clearPdfFile()">Limpar PDF</button>
+            <button type="button" class="ghost" (click)="clearExcelFile()">Limpar planilha</button>
+          </div>
+        </label>
+      </div>
+
+      <div class="grid options">
+        <label>
+          Ação
+          <select formControlName="mode">
+            <option value="validate">Somente validar</option>
+            <option value="update">Validar e atualizar</option>
+          </select>
+        </label>
+
+        <label>
+          Tolerância PDF (linhas)
+          <input type="number" formControlName="allowSkippedLines" min="0" max="100" />
+        </label>
+
+        <label>
+          Tolerância Excel (linhas)
+          <input type="number" formControlName="allowSkippedCreditRows" min="0" max="1000" />
+        </label>
+      </div>
+
+      <div class="checks">
+        <label class="check">
+          <input type="checkbox" formControlName="strictVendors" />
+          Modo estrito de consultores (exigir todos os 7)
+        </label>
+
+        <label class="check">
+          <input type="checkbox" formControlName="appendMode" />
+          Modo append (acumular dados em vez de substituir)
+        </label>
+      </div>
+
+      @if (errorMessage()) {
+        <p class="error">{{ errorMessage() }}</p>
+      }
+
+      <button type="submit" [disabled]="loading()">
+        @if (loading()) {
+          Processando...
+        } @else if (form.getRawValue().mode === 'validate') {
+          Validar arquivos
+        } @else {
+          Validar e atualizar sistema
+        }
+      </button>
+    </form>
+  </section>
+
+  @if (response(); as result) {
+    <section class="card result">
+      <h3>{{ result.message }}</h3>
+      @if (result.operationId || result.processedAt) {
+        <div class="meta">
+          @if (result.operationId) {
+            <p><strong>Protocolo:</strong> {{ result.operationId }}</p>
+          }
+          @if (result.processedAt) {
+            <p><strong>Processado em:</strong> {{ result.processedAt }}</p>
+          }
+        </div>
+      }
+
+      @if (result.audit; as audit) {
+        <section class="audit-grid">
+          <article class="audit-card">
+            <p>Novos</p>
+            <strong>{{ audit.newRecords }}</strong>
+          </article>
+          <article class="audit-card">
+            <p>Atualizados</p>
+            <strong>{{ audit.updatedRecords }}</strong>
+          </article>
+          <article class="audit-card">
+            <p>Clientes novos</p>
+            <strong>{{ audit.newCustomers ?? 0 }}</strong>
+          </article>
+          <article class="audit-card">
+            <p>Titulos novos</p>
+            <strong>{{ audit.newTitles ?? 0 }}</strong>
+          </article>
+          <article class="audit-card">
+            <p>Ignorados por duplicidade</p>
+            <strong>{{ audit.ignoredDuplicates }}</strong>
+          </article>
+          <article class="audit-card" [class.audit-card-error]="audit.errors > 0">
+            <p>Erros</p>
+            <strong>{{ audit.errors }}</strong>
+          </article>
+        </section>
+        <p class="audit-outcome" [class.audit-outcome-only-update]="isOnlyUpdateOutcome(audit)">
+          {{ getAuditOutcomeMessage(audit) }}
+        </p>
+      }
+
+      @if (result.auditLog?.length) {
+        <div class="audit-actions">
+          <button type="button" class="ghost" (click)="downloadAuditLog()">
+            Baixar log da importacao
+          </button>
+        </div>
+      }
+
+      @if (result.warnings.length > 0) {
+        <div class="warnings">
+          <strong>Avisos</strong>
+          <ul>
+            @for (warning of result.warnings; track warning) {
+              <li>{{ warning }}</li>
+            }
+          </ul>
+        </div>
+      }
+
+      <div class="files">
+        @for (item of result.files; track item.fileName) {
+          <article>
+            <p class="type">{{ item.fileType === 'pdf' ? 'PDF' : 'Excel' }}</p>
+            <strong>{{ item.fileName }}</strong>
+            <p>{{ item.details }}</p>
+            @if (item.summaryLines?.length) {
+              <ul class="summary-lines">
+                @for (line of item.summaryLines ?? []; track line) {
+                  <li>{{ line }}</li>
+                }
+              </ul>
+            }
+          </article>
+        }
+      </div>
+    </section>
+  }
+}

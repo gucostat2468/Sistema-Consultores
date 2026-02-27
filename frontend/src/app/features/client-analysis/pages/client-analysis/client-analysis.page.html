@@ -1,0 +1,349 @@
+@if (loading()) {
+  <section class="state">
+    <p>Carregando analise do cliente...</p>
+  </section>
+} @else if (error()) {
+  <section class="state state-error">
+    <p>{{ error() }}</p>
+  </section>
+} @else if (!selectedClient()) {
+  <section class="state">
+    <p>Nao ha clientes no escopo selecionado.</p>
+  </section>
+} @else {
+  @if (selectedClient(); as client) {
+    @if (kpis(); as summary) {
+      <section class="export-bar card">
+        <div>
+          <h3>Exportacao completa da Analise Cliente</h3>
+          <p>Gere PDF completo do escopo atual ou somente do cliente escolhido no filtro.</p>
+        </div>
+        <div class="export-actions">
+          <button type="button" class="secondary" (click)="exportSelectedClientAnalysisPdf()">
+            Exportar cliente selecionado
+          </button>
+          <button type="button" (click)="exportAllClientsAnalysisPdf()">
+            Exportar PDF completo (todos os clientes)
+          </button>
+        </div>
+      </section>
+
+      @if (exportError()) {
+        <section class="state state-error">
+          <p>{{ exportError() }}</p>
+        </section>
+      }
+
+      <section class="filters card">
+        <label>
+          Cliente analisado
+          <select [ngModel]="selectedClientKey() ?? ''" (ngModelChange)="selectClient($event)">
+            @for (item of clientOptions(); track item.key) {
+              <option [value]="item.key">{{ item.label }}</option>
+            }
+          </select>
+        </label>
+      </section>
+
+      <section class="kpi-grid">
+        <article class="kpi">
+          <p>Cliente</p>
+          <h3>{{ client.customerName }}</h3>
+          <span>{{ client.customerCode }} - {{ client.consultantName }}</span>
+        </article>
+        <article class="kpi">
+          <p>Saldo total</p>
+          <h3>{{ currency(summary.total) }}</h3>
+          <span>{{ summary.titles }} titulos</span>
+        </article>
+        <article class="kpi">
+          <p>Vencido</p>
+          <h3>{{ currency(summary.overdue) }}</h3>
+          <span>{{ percent(summary.total ? summary.overdue / summary.total : 0) }}</span>
+        </article>
+        <article class="kpi">
+          <p>Vence em 7 dias</p>
+          <h3>{{ currency(summary.due7) }}</h3>
+          <span>{{ percent(summary.total ? summary.due7 / summary.total : 0) }}</span>
+        </article>
+        <article class="kpi">
+          <p>Ticket medio / maior</p>
+          <h3>{{ currency(summary.avgTicket) }}</h3>
+          <span>max {{ currency(summary.maxTicket) }}</span>
+        </article>
+        <article class="kpi status-kpi">
+          <p>Status financeiro</p>
+          <h3>{{ client.score }}</h3>
+          <span [class]="statusClass(client.status)">{{ client.status }}</span>
+        </article>
+      </section>
+
+      <section class="card credit-cross">
+        <header>
+          <h3>Recebiveis x limite de credito</h3>
+          <p>
+            Cruzamento do saldo em aberto com limite da empresa para decisao comercial mais segura.
+          </p>
+        </header>
+
+        <section class="credit-onboarding">
+          <div class="credit-onboarding-head">
+            <h4>Como ler este quadro</h4>
+            <button type="button" class="guide-toggle" (click)="toggleCreditOnboarding()">
+              {{ showCreditOnboarding() ? 'Ocultar explicacao' : 'Mostrar explicacao' }}
+            </button>
+          </div>
+
+          @if (showCreditOnboarding()) {
+            @if (creditOnboarding(); as guide) {
+              <div class="credit-guide-grid">
+                <article class="credit-guide-step">
+                  <strong>1) Quanto o cliente deve</strong>
+                  <p>{{ guide.debtStory }}</p>
+                </article>
+                <article class="credit-guide-step">
+                  <strong>2) Quanto de limite livre existe</strong>
+                  <p>{{ guide.availabilityStory }}</p>
+                </article>
+                <article class="credit-guide-step">
+                  <strong>3) O que significa necessidade imediata</strong>
+                  <p>{{ guide.needStory }}</p>
+                </article>
+              </div>
+              <p [class]="'credit-guide-final ' + guide.priorityClass">
+                Prioridade {{ guide.priorityLabel }}: {{ guide.actionStory }}
+              </p>
+            }
+          }
+        </section>
+
+        @if (selectedCreditDebtPanel(); as panel) {
+          <div class="credit-overview-grid">
+            <article class="credit-overview">
+              <p>Recebiveis em aberto</p>
+              <strong>{{ currency(panel.receivablesOpen) }}</strong>
+              <span>
+                Vencido {{ currency(panel.debtOverdue) }} | Vence em 7 dias {{ currency(panel.due7) }}
+              </span>
+            </article>
+            <article class="credit-overview">
+              <p>Limite de credito</p>
+              <strong>{{ currency(panel.limitTotal) }}</strong>
+              <span>
+                Disponivel {{ currency(panel.available) }} | {{ panel.sourceLabel }}
+              </span>
+            </article>
+            <article class="credit-overview">
+              <p>
+                Cobertura do saldo
+                <span
+                  class="inline-help"
+                  title="Mostra quanto do saldo em aberto pode ser coberto pelo limite disponivel."
+                  aria-label="Ajuda: cobertura do saldo"
+                >?</span>
+              </p>
+              <strong>{{ percent(selectedCreditCoverageRatio()) }}</strong>
+              <span>Disponivel para cada R$ 1 em aberto</span>
+            </article>
+            <article class="credit-overview">
+              <p>
+                Necessidade imediata
+                <span
+                  class="inline-help"
+                  title="Valor adicional necessario para cobrir 100% da divida atual com o limite disponivel."
+                  aria-label="Ajuda: necessidade imediata"
+                >?</span>
+              </p>
+              <strong>{{ currency(panel.gap) }}</strong>
+              <span>{{ creditNeedLabel(panel.gap) }}</span>
+            </article>
+          </div>
+
+          <div class="credit-kpi-grid">
+            <article class="mini-kpi">
+              <p>Quanto o cliente deve</p>
+              <strong>{{ currency(panel.debtTotal) }}</strong>
+              <span>A vencer {{ currency(panel.debtFuture) }}</span>
+            </article>
+            <article class="mini-kpi">
+              <p>Divida / Limite</p>
+              <strong>{{ percent(panel.debtToLimitRatio) }}</strong>
+              <span>Relacao principal para decisao</span>
+            </article>
+            <article class="mini-kpi">
+              <p>
+                Divida / Disponivel
+                <span
+                  class="inline-help"
+                  title="Compara a divida atual com o limite disponivel agora. Quanto maior, maior a pressao financeira."
+                  aria-label="Ajuda: divida por disponivel"
+                >?</span>
+              </p>
+              <strong>{{ percent(panel.debtToAvailableRatio) }}</strong>
+              <span>{{ currency(panel.debtTotal) }} sobre {{ currency(panel.available) }}</span>
+            </article>
+            <article class="mini-kpi">
+              <p>Risco vencido</p>
+              <strong>{{ currency(panel.debtOverdue) }}</strong>
+              <span>{{ percent(panel.debtTotal ? panel.debtOverdue / panel.debtTotal : 0) }} da divida total</span>
+            </article>
+          </div>
+
+          <div class="credit-meta">
+            <span [class]="creditAlertClass(panel.alert)">{{ creditAlertLabel(panel.alert) }}</span>
+            <span class="credit-source">{{ panel.sourceLabel }}</span>
+            @if (selectedCreditItem()?.updatedAt; as updatedAt) {
+              <p>Atualizado em {{ date(updatedAt) }}</p>
+            } @else {
+              <p>Sem data de atualizacao do limite real.</p>
+            }
+          </div>
+
+          @if (creditSummary(); as summary) {
+            <p class="hint">
+              No escopo atual: {{ summary.customersWithLimit }} clientes com limite e
+              {{ summary.customersWithoutLimit }} sem limite.
+            </p>
+          }
+        } @else {
+          <p class="empty">Sem dados suficientes para cruzar recebiveis, limite e divida deste cliente.</p>
+          @if (creditSummary(); as summary) {
+            <p class="hint">
+              No escopo atual: {{ summary.customersWithLimit }} clientes com limite e
+              {{ summary.customersWithoutLimit }} sem limite.
+            </p>
+          }
+        }
+      </section>
+
+      <section class="chart-grid">
+        <article class="card">
+          <header>
+            <h3>Composicao da exposicao (R$)</h3>
+            <p>Cruzamento entre valor aberto e proximidade de vencimento.</p>
+          </header>
+
+          <div class="composition-layout">
+            <div class="donut-wrap">
+              <div class="donut" [style.background]="donutStyle()">
+                <div class="donut-center">
+                  <strong>{{ currency(summary.total) }}</strong>
+                  <span>Total</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="legend">
+              @for (bucket of exposureBuckets(); track bucket.label) {
+                <div class="legend-item">
+                  <span [class]="toneClass(bucket.tone)"></span>
+                  <div>
+                    <strong>{{ bucket.label }}</strong>
+                    <p>
+                      {{ currency(bucket.value) }} | {{ bucket.count }} titulos |
+                      {{ percent(bucket.ratio) }}
+                    </p>
+                  </div>
+                </div>
+              }
+            </div>
+          </div>
+        </article>
+
+        <article class="card">
+          <header>
+            <h3>Concentracao no tempo (faixas de vencimento)</h3>
+            <p>Leitura simples de onde o valor esta concentrado no curto, medio e longo prazo.</p>
+          </header>
+
+          @if (timeConcentration().length === 0) {
+            <p class="empty">Sem titulos para montar o grafico.</p>
+          } @else {
+            <div class="time-bars">
+              @for (band of timeConcentration(); track band.label) {
+                <div class="time-row">
+                  <div class="time-label">
+                    <strong>{{ band.label }}</strong>
+                    <p>{{ band.count }} titulos</p>
+                  </div>
+                  <div class="time-track">
+                    <div
+                      class="time-fill"
+                      [class.time-fill-overdue]="band.tone === 'overdue'"
+                      [class.time-fill-near]="band.tone === 'near'"
+                      [class.time-fill-mid]="band.tone === 'mid'"
+                      [class.time-fill-future]="band.tone === 'future'"
+                      [style.width.%]="band.ratio * 100"
+                    ></div>
+                  </div>
+                  <div class="time-values">
+                    <strong>{{ currency(band.amount) }}</strong>
+                    <span>{{ percent(summary.total ? band.amount / summary.total : 0) }}</span>
+                  </div>
+                </div>
+              }
+            </div>
+            <p class="hint">
+              A barra mais longa mostra a faixa com maior valor em aberto para este cliente.
+            </p>
+          }
+        </article>
+      </section>
+
+      <section class="chart-grid">
+        <article class="card">
+          <header>
+            <h3>Matriz de risco (horizonte x ticket)</h3>
+            <p>Quanto maior a intensidade, maior o valor concentrado naquela combinacao.</p>
+          </header>
+          <div class="matrix">
+            <div class="matrix-head">
+              <span></span>
+              <span>Ticket baixo</span>
+              <span>Ticket medio</span>
+              <span>Ticket alto</span>
+            </div>
+            @for (row of matrix(); track row.label) {
+              <div class="matrix-row" [ngClass]="matrixRowClass(row)">
+                <strong>{{ row.label }}</strong>
+                @for (cell of row.cells; track cell.amount + '-' + cell.count) {
+                  <div class="cell" [style]="matrixCellStyle(cell, row.tone)">
+                    <p>{{ cell.count }} tit.</p>
+                    <strong>{{ currency(cell.amount) }}</strong>
+                  </div>
+                }
+              </div>
+            }
+          </div>
+        </article>
+
+        <article class="card">
+          <header>
+            <h3>Top titulos por exposicao</h3>
+            <p>Foco operacional para abordagem do consultor.</p>
+          </header>
+          @if (topTitles().length === 0) {
+            <p class="empty">Sem titulos para ranking.</p>
+          } @else {
+            <div class="bars-scroll">
+              <div class="bars">
+                @for (item of topTitles(); track item.id) {
+                  <div class="bar-row">
+                    <div class="bar-info">
+                      <strong>{{ item.documentRef }} - Parcela {{ item.installment }}</strong>
+                      <p [ngClass]="dayBadgeClass(item.dayDiff)">{{ date(item.dueDate) }} | {{ dayBadge(item.dayDiff) }}</p>
+                    </div>
+                    <div class="bar-track">
+                      <div class="bar-fill" [ngClass]="topBarClass(item.dayDiff)" [style.width.%]="item.width"></div>
+                    </div>
+                    <strong>{{ currency(item.balance) }}</strong>
+                  </div>
+                }
+              </div>
+            </div>
+          }
+        </article>
+      </section>
+    }
+  }
+}

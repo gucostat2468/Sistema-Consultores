@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="DronePro Consultores">
+  <path d="M8 52L24 10L32 27L18 52Z" fill="#e44fb5"/>
+  <path d="M32 27L40 10L56 52L42 52Z" fill="#13c9be"/>
+
+  <g fill="none" stroke="#1b4e5a" stroke-width="4" stroke-linecap="round">
+    <line x1="18" y1="34" x2="46" y2="34"/>
+    <line x1="32" y1="20" x2="32" y2="48"/>
+  </g>
+
+  <g fill="#ffffff" stroke="#1b4e5a" stroke-width="3">
+    <circle cx="18" cy="34" r="5.4"/>
+    <circle cx="46" cy="34" r="5.4"/>
+    <circle cx="32" cy="20" r="5.4"/>
+    <circle cx="32" cy="48" r="5.4"/>
+  </g>
+
+  <circle cx="32" cy="34" r="4.6" fill="#1b4e5a"/>
+</svg>
+

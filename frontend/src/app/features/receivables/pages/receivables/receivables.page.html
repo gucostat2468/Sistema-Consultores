@@ -1,0 +1,146 @@
+<section class="filters card">
+  <label>
+    Buscar titulo
+    <input [ngModel]="search()" (ngModelChange)="setSearch($event)" placeholder="cliente, codigo ou documento" />
+  </label>
+
+  <label>
+    Janela de vencimento
+    <select [ngModel]="horizon()" (ngModelChange)="setHorizon($event)">
+      <option value="Todos">Todos</option>
+      <option value="Vencido">Vencido</option>
+      <option value="0-7">0 a 7 dias</option>
+      <option value="8-30">8 a 30 dias</option>
+      <option value="30+">Acima de 30 dias</option>
+    </select>
+  </label>
+
+  <label>
+    Ordenar por
+    <select [ngModel]="sortBy()" (ngModelChange)="setSortBy($event)">
+      <option value="dueDate">Data de vencimento</option>
+      <option value="balance">Valor do saldo</option>
+      <option value="customer">Cliente</option>
+    </select>
+  </label>
+
+  <label>
+    Sentido
+    <select [ngModel]="sortDirection()" (ngModelChange)="setSortDirection($event)">
+      <option value="asc">Crescente</option>
+      <option value="desc">Decrescente</option>
+    </select>
+  </label>
+
+  <label class="check">
+    <input
+      type="checkbox"
+      [ngModel]="groupByCompany()"
+      (ngModelChange)="setGroupByCompany($event)"
+    />
+    Agrupar por empresa
+  </label>
+</section>
+
+<section class="summary-grid">
+  @if (snapshot; as summary) {
+    <article class="summary-card card">
+      <p>Titulos no filtro</p>
+      <strong>{{ summary.titles }}</strong>
+    </article>
+
+    <article class="summary-card card">
+      <p>Empresas no filtro</p>
+      <strong>{{ summary.companies }}</strong>
+    </article>
+
+    <article class="summary-card card">
+      <p>Saldo total filtrado</p>
+      <strong>{{ currency(summary.totalBalance) }}</strong>
+    </article>
+
+    <article class="summary-card card">
+      <p>Vencidos</p>
+      <strong>{{ summary.overdueTitles }} tit.</strong>
+      <span>{{ currency(summary.overdueBalance) }}</span>
+    </article>
+
+    <article class="summary-card card">
+      <p>Vence em 7 dias</p>
+      <strong>{{ summary.due7Titles }} tit.</strong>
+      <span>{{ currency(summary.due7Balance) }}</span>
+    </article>
+
+    <article class="summary-card card">
+      <p>Maior titulo</p>
+      <strong>{{ currency(summary.largestTitleBalance) }}</strong>
+      <span>{{ summary.largestTitleCustomer }}</span>
+    </article>
+  }
+</section>
+
+<section class="card table-card">
+  @if (loading()) {
+    <p class="state">Carregando titulos...</p>
+  } @else if ((groupByCompany() ? groupedFiltered.length : filteredSorted.length) === 0) {
+    <p class="state">Nenhum titulo para esse filtro.</p>
+  } @else {
+    <div class="head">
+      @if (groupByCompany()) {
+        <span>Cliente</span>
+        <span>Titulos</span>
+        <span>Faixa</span>
+        <span>Prox. vencto</span>
+        <span>Limite credito</span>
+        <span>Divida aberta</span>
+        <span>Status</span>
+      } @else {
+        <span>Cliente</span>
+        <span>Documento</span>
+        <span>Parcela</span>
+        <span>Vencto</span>
+        <span>Limite credito</span>
+        <span>Divida aberta</span>
+        <span>Status</span>
+      }
+    </div>
+
+    <div class="rows-scroll">
+      @if (groupByCompany()) {
+        @for (item of groupedFiltered; track item.key) {
+          <div class="row">
+            <div>
+              <strong>{{ item.customerName }}</strong>
+              <p>{{ item.customerCode }} | {{ item.consultantName }}</p>
+            </div>
+            <span>{{ item.titles }} titulos</span>
+            <span>{{ groupWindowLabel(item) }}</span>
+            <span>{{ date(item.nextDueDate) }}</span>
+            <span>{{ currency(groupCreditLimit(item)) }}</span>
+            <strong>{{ currency(groupDebtOpen(item)) }}</strong>
+            <span class="due-badge" [class]="groupDueClass(item)">
+              {{ groupDueBadge(item) }}
+            </span>
+          </div>
+        }
+      } @else {
+        @for (item of filteredSorted; track item.id) {
+          <div class="row">
+            <div>
+              <strong>{{ item.customerName }}</strong>
+              <p>{{ item.customerCode }} | {{ item.consultantName }}</p>
+            </div>
+            <span>{{ item.documentRef }}</span>
+            <span>{{ item.installment }}</span>
+            <span>{{ date(item.dueDate) }}</span>
+            <span>{{ currency(rowCreditLimit(item)) }}</span>
+            <strong>{{ currency(rowDebtOpen(item)) }}</strong>
+            <span class="due-badge" [class]="dueClass(item)">
+              {{ dueBadge(item) }}
+            </span>
+          </div>
+        }
+      }
+    </div>
+  }
+</section>

@@ -1,0 +1,59 @@
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark">
+        <img src="dronepro-icon.svg" alt="DronePro" class="brand-icon" />
+      </span>
+      <div>
+        <p class="brand-title">DronePro Consultores</p>
+        <p class="brand-subtitle">Financeiro & Estrategia</p>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <a routerLink="/app/dashboard" [queryParams]="navQueryParams()" routerLinkActive="active">Dashboard</a>
+      <a routerLink="/app/clientes" [queryParams]="navQueryParams()" routerLinkActive="active">Clientes</a>
+      <a routerLink="/app/titulos" [queryParams]="navQueryParams()" routerLinkActive="active">Titulos</a>
+      <a routerLink="/app/analise-cliente" [queryParams]="navQueryParams()" routerLinkActive="active">Analise Cliente</a>
+      @if (isAdm()) {
+        <a routerLink="/app/atualizacao-report" [queryParams]="navQueryParams()" routerLinkActive="active">Atualizacao Report</a>
+      }
+    </nav>
+
+    <div class="sidebar-footer">
+      <p class="label">Usuario logado</p>
+      <p class="value">{{ user()?.name }}</p>
+      <button type="button" (click)="logout()">Sair</button>
+    </div>
+  </aside>
+
+  <main class="content">
+    <header class="topbar">
+      <div>
+        <p class="overline">Painel</p>
+        <h1>{{ routeTitle() }}</h1>
+      </div>
+
+      <div class="topbar-right">
+        @if (isAdmin()) {
+          <label class="scope">
+            Escopo
+            <select
+              [ngModel]="selectedConsultantId() ?? ''"
+              (ngModelChange)="setScope($event)"
+            >
+              <option value="">Todas as carteiras</option>
+              @for (consultant of consultants(); track consultant.id) {
+                <option [value]="consultant.id">{{ consultant.name }}</option>
+              }
+            </select>
+          </label>
+        }
+      </div>
+    </header>
+
+    <section class="page">
+      <router-outlet />
+    </section>
+  </main>
+</div>
