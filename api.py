@@ -12,7 +12,7 @@ import uuid
 import pandas as pd
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from src.db import (
     AuthenticatedUser,
@@ -1362,14 +1362,14 @@ def admin_import_report_v1(
     )
 
 
-@app.get("/", include_in_schema=False)
-def frontend_root() -> FileResponse | dict:
+@app.get("/", include_in_schema=False, response_model=None)
+def frontend_root():
     if FRONTEND_INDEX_FILE.is_file():
         return FileResponse(FRONTEND_INDEX_FILE)
-    return {"ok": True, "service": "dronepro-api", "frontend": "not-built"}
+    return JSONResponse({"ok": True, "service": "dronepro-api", "frontend": "not-built"})
 
 
-@app.get("/{full_path:path}", include_in_schema=False)
+@app.get("/{full_path:path}", include_in_schema=False, response_model=None)
 def frontend_spa_or_asset(full_path: str):
     if full_path == "api" or full_path.startswith("api/"):
         raise HTTPException(status_code=404, detail="Rota nao encontrada.")
