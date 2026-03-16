@@ -35,7 +35,7 @@ select {
 .table-head,
 .table-row {
   display: grid;
-  grid-template-columns: 1.25fr 0.8fr 0.8fr 0.7fr 0.7fr 0.5fr 0.65fr 0.7fr 1.2fr;
+  grid-template-columns: 1.25fr 0.8fr 0.8fr 0.7fr 0.7fr 0.5fr 0.65fr 0.7fr 1.45fr;
   gap: 0.55rem;
   align-items: center;
 }
@@ -122,6 +122,11 @@ select {
   color: var(--text-soft);
 }
 
+.state-success {
+  background: #e7f7f0;
+  color: #145847;
+}
+
 .analysis-link {
   display: inline-block;
   text-decoration: none;
@@ -135,6 +140,51 @@ select {
   background: #f4faf8;
 }
 
+.approval-cell {
+  display: grid;
+  gap: 0.34rem;
+}
+
+.client-action {
+  margin: 0;
+}
+
+.approval-chip {
+  display: inline-flex;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 0.24rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.approval-ok {
+  background: var(--due-safe-bg);
+  color: var(--due-safe-fg);
+}
+
+.approval-no-limit {
+  background: var(--due-overdue-bg);
+  color: var(--due-overdue-fg);
+}
+
+.approval-neutral {
+  background: #eef2ec;
+  color: #44625b;
+}
+
+.approval-btn {
+  width: fit-content;
+  border: 0;
+  border-radius: 8px;
+  padding: 0.36rem 0.56rem;
+  font-size: 0.76rem;
+  font-weight: 700;
+  background: #0f5b5a;
+  color: #fff;
+  cursor: pointer;
+}
+
 @media (max-width: 1160px) {
   .table-head {
     display: none;
@@ -145,6 +195,12 @@ select {
     border: 1px solid #eff2ec;
     border-radius: 12px;
     margin: 0.45rem;
+  }
+}
+
+@media (max-width: 900px) {
+  .filters {
+    grid-template-columns: 1fr;
   }
 }
 

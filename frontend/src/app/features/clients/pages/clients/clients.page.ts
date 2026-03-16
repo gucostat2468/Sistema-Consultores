@@ -4,8 +4,11 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { distinctUntilChanged, forkJoin, map, switchMap } from 'rxjs';
+import { environment } from '../../../../../environments/environment';
 import { ClientHealth, CreditLimitItem } from '../../../../core/models/dashboard.models';
+import { AuthService } from '../../../../core/services/auth.service';
 import { DashboardService } from '../../../../core/services/dashboard.service';
+import { EncaminharModalComponent } from '../../../pedidos/components/encaminhar-modal/encaminhar-modal.component';
 import { toCurrency, toPercent } from '../../../../shared/utils/format';
 import {
   buildCreditLookupMaps,
@@ -22,13 +25,14 @@ interface ClientsViewContext {
 
 @Component({
   selector: 'app-clients-page',
-  imports: [CommonModule, FormsModule, RouterLink],
+  imports: [CommonModule, FormsModule, RouterLink, EncaminharModalComponent],
   templateUrl: './clients.page.html',
   styleUrl: './clients.page.scss'
 })
 export class ClientsPage {
   private static readonly STORAGE_PREFIX = 'clients:view:';
   private readonly route = inject(ActivatedRoute);
+  private readonly auth = inject(AuthService);
   private readonly dashboardService = inject(DashboardService);
   private readonly destroyRef = inject(DestroyRef);
   private pendingScrollRestore: number | null = null;
@@ -40,6 +44,22 @@ export class ClientsPage {
   readonly statusFilter = signal<'Todos' | ClientHealth['status']>('Todos');
   readonly selectedConsultantId = signal<number | null>(null);
   readonly creditLookup = computed(() => buildCreditLookupMaps(this.creditItems()));
+  readonly modalClient = signal<ClientHealth | null>(null);
+  readonly orderFeedback = signal<string | null>(null);
+  readonly canForwardOrder = computed(() => {
+    const usernames = (
+      (environment as { operationalUsernames?: string[] }).operationalUsernames ?? [
+        'isabel',
+        'isabel_dronepro',
+        'marcos',
+        'marcos_dronepro'
+      ]
+    )
+      .map((item) => String(item || '').trim().toLowerCase())
+      .filter(Boolean);
+    const username = this.auth.currentUser()?.username?.toLowerCase() ?? '';
+    return usernames.includes(username);
+  });
 
   constructor() {
     this.destroyRef.onDestroy(() => this.rememberContext());
@@ -108,7 +128,15 @@ export class ClientsPage {
   }
 
   buildClientKey(client: ClientHealth): string {
-    return `${client.consultantId}::${client.customerCode}`;
+    const normalizedCode = (client.customerCode ?? '').trim();
+    if (normalizedCode) {
+      return `${client.consultantId}::code::${normalizedCode}`;
+    }
+    return `${client.consultantId}::name::${this.normalizeCustomerKey(client.customerName)}`;
+  }
+
+  buildClientTrackKey(client: ClientHealth, index: number): string {
+    return `${this.buildClientKey(client)}::${index}`;
   }
 
   clientCreditLimit(client: ClientHealth): number {
@@ -144,6 +172,28 @@ export class ClientsPage {
       consultantId: this.selectedConsultantId(),
       clientKey: this.buildClientKey(client)
     };
+  }
+
+  hasCreditLimit(client: ClientHealth): boolean {
+    return this.clientCreditLimit(client) > 0;
+  }
+
+  openForwardModal(client: ClientHealth): void {
+    if (!this.canForwardOrder()) {
+      this.orderFeedback.set('Encaminhamento de pedido permitido apenas para Marcos e Isabel.');
+      return;
+    }
+    this.modalClient.set(client);
+    this.orderFeedback.set(null);
+  }
+
+  closeForwardModal(): void {
+    this.modalClient.set(null);
+  }
+
+  onOrderForwarded(): void {
+    this.orderFeedback.set('Pedido registrado. Consulte a sessão Status para acompanhar o fluxo.');
+    this.modalClient.set(null);
   }
 
   rememberContext(): void {
@@ -220,5 +270,14 @@ export class ClientsPage {
       return value;
     }
     return 'Todos';
+  }
+
+  private normalizeCustomerKey(value: string): string {
+    return String(value ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, ' ')
+      .trim();
   }
 }

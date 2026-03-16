@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from typing import Literal
+import re
+import unicodedata
 
 from src.credit_excel_parser import CreditParseReport
 from src.pdf_parser import ParseReport
@@ -501,6 +503,93 @@ def validate_excel_receivables_parse_report(
     return ValidationResult(issues=issues, stats=stats)
 
 
+def validate_report_v1_workbook_layout(
+    sheet_names: list[str],
+    *,
+    expected_sheet_count: int = 4,
+) -> ValidationResult:
+    issues: list[ValidationIssue] = []
+    normalized_pairs = [
+        (sheet_name, normalize_sheet_key(sheet_name))
+        for sheet_name in sheet_names
+    ]
+
+    report_sheets = [name for name, key in normalized_pairs if key.startswith("REPORT")]
+    credit_sheets = [name for name, key in normalized_pairs if "LIMITE DE CREDITO" in key]
+    order_sheets = [
+        name
+        for name, key in normalized_pairs
+        if "PEDIDOS" in key and "GERAL" in key
+    ]
+    covered = set(report_sheets + credit_sheets + order_sheets)
+    extra_sheets = [name for name in sheet_names if name not in covered]
+
+    if len(sheet_names) != expected_sheet_count:
+        issues.append(
+            ValidationIssue(
+                level="error",
+                code="REPORT_V1_SHEET_COUNT",
+                message=(
+                    f"O perfil report_v1 exige exatamente {expected_sheet_count} abas; "
+                    f"arquivo recebido com {len(sheet_names)}."
+                ),
+            )
+        )
+
+    if not report_sheets:
+        issues.append(
+            ValidationIssue(
+                level="error",
+                code="REPORT_V1_MISSING_REPORT_SHEET",
+                message="Aba principal do report nao encontrada (esperado nome com 'Report').",
+            )
+        )
+
+    if len(credit_sheets) < 2:
+        issues.append(
+            ValidationIssue(
+                level="error",
+                code="REPORT_V1_CREDIT_SHEETS",
+                message=(
+                    "O perfil report_v1 exige duas abas de limite de credito "
+                    "(ex.: 'Limite de credito' e variacao)."
+                ),
+            )
+        )
+
+    if not order_sheets:
+        issues.append(
+            ValidationIssue(
+                level="error",
+                code="REPORT_V1_MISSING_ORDERS_SHEET",
+                message="Aba de apoio de pedidos nao encontrada (esperado nome com 'Pedidos Geral').",
+            )
+        )
+
+    if extra_sheets:
+        issues.append(
+            ValidationIssue(
+                level="warning",
+                code="REPORT_V1_EXTRA_SHEETS",
+                message=(
+                    "Abas adicionais fora do perfil report_v1: "
+                    + ", ".join(extra_sheets)
+                ),
+            )
+        )
+
+    stats: dict[str, object] = {
+        "sheet_names": sheet_names,
+        "sheet_count": len(sheet_names),
+        "expected_sheet_count": expected_sheet_count,
+        "report_sheets": report_sheets,
+        "credit_sheets": credit_sheets,
+        "order_sheets": order_sheets,
+        "extra_sheets": extra_sheets,
+    }
+    return ValidationResult(issues=issues, stats=stats)
+
+
 def count_duplicate_rows(report: ParseReport) -> int:
     keys = [
         (
@@ -548,3 +637,10 @@ def normalize_vendor_set(names: list[str]) -> set[str]:
 
 def normalize_name(name: str) -> str:
     return " ".join(name.upper().replace("_", " ").split())
+
+
+def normalize_sheet_key(name: str) -> str:
+    normalized = unicodedata.normalize("NFKD", str(name or ""))
+    ascii_name = normalized.encode("ascii", "ignore").decode("ascii")
+    key = re.sub(r"[^A-Z0-9]+", " ", ascii_name.upper())
+    return " ".join(key.split())

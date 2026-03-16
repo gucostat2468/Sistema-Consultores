@@ -38,8 +38,8 @@ export class ReportImportPage {
 
     this.errorMessage.set(null);
     const name = file.name.toLowerCase();
-    if (!name.endsWith('.xls') && !name.endsWith('.xlsx') && !name.endsWith('.xlsm')) {
-      this.errorMessage.set('Use apenas planilha no padrao report (.xls, .xlsx ou .xlsm).');
+    if (!name.endsWith('.xls') && !name.endsWith('.xlsx') && !name.endsWith('.xlsm') && !name.endsWith('.csv')) {
+      this.errorMessage.set('Use planilha em formato .xls, .xlsx, .xlsm ou .csv.');
       input.value = '';
       return;
     }
@@ -54,7 +54,7 @@ export class ReportImportPage {
 
   execute(replaceBase: boolean): void {
     if (!this.isAdmUser) {
-      this.errorMessage.set('Acesso negado. Somente o usuário adm pode importar arquivos.');
+      this.errorMessage.set('Acesso negado. Somente Marcos e Isabel podem importar arquivos.');
       return;
     }
 
@@ -83,7 +83,13 @@ export class ReportImportPage {
       .executeReportV1(file, replaceBase)
       .pipe(finalize(() => this.loading.set(false)))
       .subscribe({
-        next: (response) => this.response.set(response),
+        next: (response) => {
+          this.response.set(response);
+          if (!response.success) {
+            const firstWarning = response.warnings?.[0];
+            this.errorMessage.set(firstWarning ? `${response.message} ${firstWarning}` : response.message);
+          }
+        },
         error: (error: Error) =>
           this.errorMessage.set(error.message || 'Falha ao processar o report padrao.')
       });
@@ -91,7 +97,7 @@ export class ReportImportPage {
 
   clearAllData(): void {
     if (!this.isAdmUser) {
-      this.errorMessage.set('Acesso negado. Somente o usuário adm pode limpar dados.');
+      this.errorMessage.set('Acesso negado. Somente Marcos e Isabel podem limpar dados.');
       return;
     }
 

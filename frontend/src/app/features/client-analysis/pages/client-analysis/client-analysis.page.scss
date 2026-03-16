@@ -10,6 +10,11 @@
   color: #952727;
 }
 
+.state-success {
+  color: #145847;
+  background: #e7f7f0;
+}
+
 .export-bar {
   display: flex;
   justify-content: space-between;
@@ -70,24 +75,30 @@
   box-shadow: var(--shadow-sm);
 }
 
-.inline-help {
-  display: inline-grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  margin-left: 0.28rem;
-  border-radius: 999px;
-  border: 1px solid #cdd9d2;
-  background: #f8fbf9;
-  color: #2f4b47;
-  font-size: 0.68rem;
-  font-weight: 700;
-  cursor: help;
-  vertical-align: middle;
-}
-
 .credit-cross {
   margin-top: 0.85rem;
+}
+
+.approval-cta {
+  border: 1px solid #e5eae2;
+  border-radius: 12px;
+  background: #f8fcfa;
+  padding: 0.62rem 0.72rem;
+  margin-bottom: 0.65rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.approval-cta button {
+  border: 0;
+  border-radius: 10px;
+  background: #0f5b5a;
+  color: #fff;
+  padding: 0.5rem 0.8rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
 }
 
 .credit-onboarding {
@@ -752,6 +763,10 @@ select {
     justify-content: flex-start;
   }
 
+  .export-actions button {
+    width: 100%;
+  }
+
   .kpi-grid {
     grid-template-columns: 1fr;
   }
@@ -766,6 +781,16 @@ select {
 
   .credit-kpi-grid {
     grid-template-columns: 1fr;
+  }
+
+  .approval-cta {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+
+  .approval-cta button {
+    width: 100%;
   }
 
   .composition-layout {

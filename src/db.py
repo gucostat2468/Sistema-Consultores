@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 import json
+import os
 import re
 import sqlite3
 import unicodedata
@@ -17,6 +18,14 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT_DIR / "data"
 DB_PATH = DATA_DIR / "consultores.db"
 
+DEFAULT_FINANCIAL_READ_USERNAMES = {"vitor_financeiro"}
+EXTRA_FINANCIAL_READ_USERNAMES = {
+    str(item or "").strip().lower()
+    for item in os.getenv("FINANCIAL_USERNAMES", "").split(",")
+    if str(item or "").strip()
+}
+FINANCIAL_READ_USERNAMES = DEFAULT_FINANCIAL_READ_USERNAMES | EXTRA_FINANCIAL_READ_USERNAMES
+
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -26,6 +35,7 @@ CREATE TABLE IF NOT EXISTS consultants (
     name TEXT NOT NULL UNIQUE,
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
+    email TEXT,
     is_admin INTEGER NOT NULL DEFAULT 0 CHECK (is_admin IN (0, 1)),
     is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -213,6 +223,84 @@ CREATE TABLE IF NOT EXISTS staging_credit_limits (
 
 CREATE INDEX IF NOT EXISTS idx_staging_credit_limits_batch
     ON staging_credit_limits (batch_id, customer_key);
+
+CREATE TABLE IF NOT EXISTS order_email_config (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    isabel_emails TEXT NOT NULL DEFAULT '',
+    vitor_emails TEXT NOT NULL DEFAULT '',
+    marcos_emails TEXT NOT NULL DEFAULT '',
+    updated_by_user_id INTEGER REFERENCES consultants(id) ON DELETE SET NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS order_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    order_number TEXT NOT NULL,
+    consultant_id INTEGER NOT NULL REFERENCES consultants(id) ON DELETE RESTRICT,
+    requested_by_user_id INTEGER NOT NULL REFERENCES consultants(id) ON DELETE RESTRICT,
+    customer_code TEXT,
+    customer_name TEXT NOT NULL,
+    customer_id_doc TEXT,
+    order_value_cents INTEGER NOT NULL,
+    open_balance_cents INTEGER NOT NULL DEFAULT 0,
+    credit_limit_cents INTEGER NOT NULL DEFAULT 0,
+    over_limit_cents INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL,
+    status_reason TEXT,
+    extracted_json TEXT,
+    original_pdf_path TEXT NOT NULL,
+    signed_pdf_path TEXT,
+    analysis_pdf_path TEXT,
+    package_pdf_path TEXT,
+    signature_mode TEXT,
+    signature_hash TEXT,
+    signature_canvas_path TEXT,
+    signed_by_user_id INTEGER REFERENCES consultants(id) ON DELETE SET NULL,
+    signed_at TEXT,
+    returned_reason TEXT,
+    distribution_json TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_order_requests_status_created
+    ON order_requests (status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_order_requests_consultant_created
+    ON order_requests (consultant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_order_requests_requested_by
+    ON order_requests (requested_by_user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS order_request_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_request_id INTEGER NOT NULL REFERENCES order_requests(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    actor_user_id INTEGER REFERENCES consultants(id) ON DELETE SET NULL,
+    actor_name TEXT,
+    from_status TEXT,
+    to_status TEXT,
+    message TEXT,
+    payload_json TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_order_request_events_order_created
+    ON order_request_events (order_request_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS order_email_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_request_id INTEGER NOT NULL REFERENCES order_requests(id) ON DELETE CASCADE,
+    email_kind TEXT NOT NULL,
+    recipient TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    success INTEGER NOT NULL DEFAULT 0 CHECK (success IN (0, 1)),
+    error_message TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_order_email_logs_order
+    ON order_email_logs (order_request_id, created_at DESC);
 """
 
 
@@ -222,6 +310,7 @@ class AuthenticatedUser:
     name: str
     username: str
     is_admin: bool
+    email: str | None = None
 
 
 @dataclass
@@ -250,21 +339,45 @@ def init_db() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     with get_connection() as conn:
         conn.executescript(SCHEMA_SQL)
+        ensure_schema_upgrades(conn)
+
+
+def ensure_schema_upgrades(conn: sqlite3.Connection) -> None:
+    consultant_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(consultants)").fetchall()
+    }
+    if "email" not in consultant_columns:
+        conn.execute("ALTER TABLE consultants ADD COLUMN email TEXT")
+
+    order_request_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(order_requests)").fetchall()
+    }
+    if "analysis_pdf_path" not in order_request_columns:
+        conn.execute("ALTER TABLE order_requests ADD COLUMN analysis_pdf_path TEXT")
+    if "package_pdf_path" not in order_request_columns:
+        conn.execute("ALTER TABLE order_requests ADD COLUMN package_pdf_path TEXT")
 
 
 def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA synchronous = NORMAL;")
+    conn.execute("PRAGMA busy_timeout = 5000;")
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
 
 def authenticate_user(username: str, password: str) -> AuthenticatedUser | None:
-    username_clean = username.strip()
-    candidates = [username_clean]
-    if username_clean.lower() == "adm":
+    username_clean = str(username).strip()
+    if not username_clean:
+        return None
+
+    username_key = username_clean.casefold()
+    candidates = [username_key]
+    if username_key == "adm":
         candidates.append("admin")
-    elif username_clean.lower() == "admin":
+    elif username_key == "admin":
         candidates.append("adm")
 
     row = None
@@ -272,9 +385,9 @@ def authenticate_user(username: str, password: str) -> AuthenticatedUser | None:
         for candidate in candidates:
             row = conn.execute(
                 """
-                SELECT id, name, username, password_hash, is_admin
+                SELECT id, name, username, password_hash, is_admin, email
                 FROM consultants
-                WHERE username = ? AND is_active = 1
+                WHERE lower(username) = ? AND is_active = 1
                 """,
                 (candidate,),
             ).fetchone()
@@ -291,6 +404,7 @@ def authenticate_user(username: str, password: str) -> AuthenticatedUser | None:
         name=row["name"],
         username=row["username"],
         is_admin=bool(row["is_admin"]),
+        email=row["email"],
     )
 
 
@@ -315,13 +429,52 @@ def list_consultants() -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
             """
-            SELECT id, name, username, is_admin
+            SELECT id, name, username, email, is_admin
             FROM consultants
             WHERE is_active = 1
             ORDER BY is_admin DESC, name ASC
             """
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def get_consultant_by_id(consultant_id: int) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id, name, username, email, is_admin, is_active
+            FROM consultants
+            WHERE id = ?
+            """,
+            (int(consultant_id),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_active_admin_users() -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, name, username, email
+            FROM consultants
+            WHERE is_active = 1 AND is_admin = 1
+            ORDER BY name ASC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def update_consultant_email(*, consultant_id: int, email: str | None) -> None:
+    value = normalize_spaces(email) if email else None
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE consultants
+            SET email = ?
+            WHERE id = ?
+            """,
+            (value, int(consultant_id)),
+        )
 
 
 def import_receivables(
@@ -654,7 +807,10 @@ def fetch_receivables_for_user(
     where_sql = "WHERE r.consultant_id = ?"
     params: list[int] = [user.id]
 
-    if user.is_admin:
+    username_key = str(user.username or "").strip().lower()
+    has_full_read_scope = user.is_admin or username_key in FINANCIAL_READ_USERNAMES
+
+    if has_full_read_scope:
         if selected_consultant_id is None:
             where_sql = ""
             params = []
@@ -701,7 +857,10 @@ def fetch_credit_limits_for_user(
     where_sql = "WHERE cl.consultant_id = ?"
     params: list[int] = [user.id]
 
-    if user.is_admin:
+    username_key = str(user.username or "").strip().lower()
+    has_full_read_scope = user.is_admin or username_key in FINANCIAL_READ_USERNAMES
+
+    if has_full_read_scope:
         if selected_consultant_id is None:
             where_sql = ""
             params = []
@@ -1140,12 +1299,63 @@ def list_ingestion_batches(limit: int = 20) -> list[dict]:
             """,
             (capped,),
         ).fetchall()
+        batch_ids = [int(row["id"]) for row in rows]
+        files_by_batch: dict[int, list[dict]] = {}
+        if batch_ids:
+            placeholders = ", ".join("?" for _ in batch_ids)
+            file_rows = conn.execute(
+                f"""
+                SELECT
+                    id,
+                    batch_id,
+                    file_name,
+                    file_type,
+                    source_kind,
+                    record_count,
+                    meta_json,
+                    created_at
+                FROM ingestion_files
+                WHERE batch_id IN ({placeholders})
+                ORDER BY batch_id DESC, id ASC
+                """,
+                batch_ids,
+            ).fetchall()
+            for file_row in file_rows:
+                batch_id = int(file_row["batch_id"])
+                file_meta_raw = file_row["meta_json"] or "{}"
+                try:
+                    file_meta = json.loads(file_meta_raw)
+                except json.JSONDecodeError:
+                    file_meta = {}
+                files_by_batch.setdefault(batch_id, []).append(
+                    {
+                        "id": int(file_row["id"]),
+                        "fileName": file_row["file_name"],
+                        "fileType": file_row["file_type"],
+                        "sourceKind": file_row["source_kind"],
+                        "recordCount": int(file_row["record_count"] or 0),
+                        "meta": file_meta,
+                        "createdAt": file_row["created_at"],
+                    }
+                )
 
     payload: list[dict] = []
     for row in rows:
+        row_id = int(row["id"])
+        audit_raw = row["audit_json"] or "{}"
+        warnings_raw = row["warnings_json"] or "[]"
+        try:
+            audit = json.loads(audit_raw)
+        except json.JSONDecodeError:
+            audit = {}
+        try:
+            warnings = json.loads(warnings_raw)
+        except json.JSONDecodeError:
+            warnings = []
+
         payload.append(
             {
-                "id": int(row["id"]),
+                "id": row_id,
                 "operationId": row["operation_id"],
                 "mode": row["mode"],
                 "actorUsername": row["actor_username"],
@@ -1153,8 +1363,9 @@ def list_ingestion_batches(limit: int = 20) -> list[dict]:
                 "appendMode": bool(row["append_mode"]),
                 "status": row["status"],
                 "message": row["message"],
-                "audit": json.loads(row["audit_json"] or "{}"),
-                "warnings": json.loads(row["warnings_json"] or "[]"),
+                "audit": audit,
+                "warnings": warnings,
+                "files": files_by_batch.get(row_id, []),
                 "createdAt": row["created_at"],
                 "completedAt": row["completed_at"],
             }

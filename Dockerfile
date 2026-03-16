@@ -20,7 +20,7 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY api.py app.py ./
+COPY api.py ./
 COPY src ./src
 COPY scripts ./scripts
 COPY --from=frontend_builder /frontend/dist ./frontend/dist

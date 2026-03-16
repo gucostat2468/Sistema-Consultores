@@ -1,6 +1,6 @@
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Injectable, computed, inject, signal } from '@angular/core';
-import { Observable, delay, of, tap, throwError } from 'rxjs';
+import { Observable, catchError, delay, of, tap, throwError } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { AuthSession, LoginPayload, SessionUser } from '../models/auth.models';
 import { buildMockSession, getMockUserByCredentials } from './mock-data';
@@ -22,9 +22,17 @@ export class AuthService {
       return this.loginMock(payload);
     }
 
+    const normalizedPayload: LoginPayload = {
+      username: payload.username.trim(),
+      password: payload.password.trim()
+    };
+
     return this.http
-      .post<AuthSession>(`${environment.apiBaseUrl}/auth/login`, payload)
-      .pipe(tap((session) => this.setSession(session)));
+      .post<AuthSession>(`${environment.apiBaseUrl}/auth/login`, normalizedPayload)
+      .pipe(
+        tap((session) => this.setSession(session)),
+        catchError((error) => throwError(() => this.mapLoginError(error)))
+      );
   }
 
   logout(): void {
@@ -62,5 +70,47 @@ export class AuthService {
     } catch {
       return null;
     }
+  }
+
+  private mapLoginError(error: unknown): Error {
+    if (!(error instanceof HttpErrorResponse)) {
+      return error instanceof Error ? error : new Error('Falha no login. Tente novamente.');
+    }
+
+    if (error.status === 0) {
+      return new Error('Nao foi possivel conectar ao backend em http://localhost:8000.');
+    }
+    if (error.status === 401) {
+      return new Error('Usuario ou senha invalidos.');
+    }
+
+    const detail = this.extractBackendDetail(error);
+    if (detail) {
+      return new Error(detail);
+    }
+    return new Error(`Falha no login (${error.status}).`);
+  }
+
+  private extractBackendDetail(error: HttpErrorResponse): string | null {
+    if (!error.error) {
+      return null;
+    }
+    if (typeof error.error === 'string') {
+      try {
+        const parsed = JSON.parse(error.error) as { detail?: string };
+        if (parsed?.detail) {
+          return parsed.detail;
+        }
+      } catch {
+        return error.error.trim() || null;
+      }
+    }
+    if (typeof error.error === 'object' && 'detail' in error.error) {
+      const detail = (error.error as { detail?: unknown }).detail;
+      if (typeof detail === 'string' && detail.trim().length > 0) {
+        return detail.trim();
+      }
+    }
+    return null;
   }
 }

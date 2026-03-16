@@ -42,6 +42,10 @@ body {
   min-height: 100%;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   font-family: var(--font-body);
   color: var(--text-main);
@@ -49,6 +53,7 @@ body {
     radial-gradient(circle at 95% 10%, rgba(250, 164, 54, 0.24), transparent 40%),
     radial-gradient(circle at 4% 92%, rgba(15, 91, 90, 0.18), transparent 43%),
     var(--bg);
+  overflow-x: hidden;
 }
 
 h1,
@@ -66,4 +71,11 @@ button,
 input,
 select {
   font: inherit;
+}
+
+img,
+svg,
+canvas,
+iframe {
+  max-width: 100%;
 }

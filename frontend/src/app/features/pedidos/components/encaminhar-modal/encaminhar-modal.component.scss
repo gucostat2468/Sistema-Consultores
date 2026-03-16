@@ -1,0 +1,174 @@
+.card {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+}
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(13, 24, 31, 0.54);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  z-index: 80;
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+.modal {
+  width: min(840px, 100%);
+  padding: 1rem;
+  max-height: calc(100dvh - 2rem);
+  overflow: auto;
+}
+
+.modal-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+  align-items: flex-start;
+}
+
+.modal-head h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.modal-head p {
+  margin: 0.22rem 0 0;
+  color: var(--text-soft);
+  font-size: 0.84rem;
+}
+
+.form {
+  margin-top: 0.8rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.file-input span {
+  margin-top: 0.18rem;
+  color: var(--text-soft);
+  font-size: 0.8rem;
+}
+
+.field-hint {
+  color: var(--text-soft);
+  font-size: 0.74rem;
+}
+
+.field-error {
+  color: #9a2a2a;
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.full {
+  grid-column: 1 / -1;
+}
+
+label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--text-soft);
+  font-size: 0.82rem;
+}
+
+input {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.58rem 0.64rem;
+}
+
+input[type='checkbox'] {
+  width: 1rem;
+  height: 1rem;
+  padding: 0;
+  border-radius: 4px;
+}
+
+input.input-invalid {
+  border-color: #cb2f2f;
+}
+
+.checkbox-row {
+  align-items: center;
+  grid-template-columns: auto 1fr;
+  column-gap: 0.5rem;
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+button {
+  border: 0;
+  border-radius: 10px;
+  padding: 0.56rem 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  background: #0f5b5a;
+  color: #fff;
+}
+
+button.ghost {
+  background: #f2ede2;
+  color: #27403d;
+  border: 1px solid #d8d2c6;
+}
+
+button:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+.feedback {
+  margin-top: 0.7rem;
+  border-radius: 10px;
+  padding: 0.58rem 0.72rem;
+  font-size: 0.83rem;
+}
+
+.feedback.error {
+  background: #fde9e9;
+  color: #9a2a2a;
+}
+
+.feedback.success {
+  background: #e7f7f0;
+  color: #145847;
+}
+
+@media (max-width: 760px) {
+  .backdrop {
+    padding: 0.6rem;
+  }
+
+  .modal {
+    padding: 0.75rem;
+    max-height: calc(100dvh - 1.2rem);
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .actions {
+    flex-direction: column;
+  }
+
+  .actions button {
+    width: 100%;
+  }
+}

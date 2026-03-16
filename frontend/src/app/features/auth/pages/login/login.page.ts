@@ -1,7 +1,7 @@
 import { CommonModule } from '@angular/common';
 import { Component, inject, signal } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
-import { Router } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { finalize } from 'rxjs';
 import { AuthService } from '../../../../core/services/auth.service';
 
@@ -15,6 +15,7 @@ export class LoginPage {
   private readonly fb = inject(FormBuilder);
   private readonly auth = inject(AuthService);
   private readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute);
 
   readonly loading = signal(false);
   readonly errorMessage = signal<string | null>(null);
@@ -23,6 +24,12 @@ export class LoginPage {
     username: ['', [Validators.required]],
     password: ['', [Validators.required]]
   });
+
+  constructor() {
+    if (this.route.snapshot.queryParamMap.get('reason') === 'session-expired') {
+      this.errorMessage.set('Sessao expirada. Faca login novamente.');
+    }
+  }
 
   submit(): void {
     if (this.form.invalid || this.loading()) {
@@ -38,10 +45,13 @@ export class LoginPage {
       .pipe(finalize(() => this.loading.set(false)))
       .subscribe({
         next: () => this.router.navigateByUrl('/app/dashboard'),
-        error: (error: Error) => {
-          this.errorMessage.set(error.message || 'Falha no login. Tente novamente.');
+        error: (error: unknown) => {
+          if (error instanceof Error) {
+            this.errorMessage.set(error.message || 'Falha no login. Tente novamente.');
+            return;
+          }
+          this.errorMessage.set('Falha no login. Tente novamente.');
         }
       });
   }
 }
-

@@ -83,7 +83,7 @@ export class AdminImportPage {
 
   execute(): void {
     if (!this.isAdmUser) {
-      this.errorMessage.set('Acesso negado. Somente o usuário adm pode importar arquivos.');
+      this.errorMessage.set('Acesso negado. Somente Marcos e Isabel podem importar arquivos.');
       return;
     }
 
@@ -114,7 +114,13 @@ export class AdminImportPage {
       })
       .pipe(finalize(() => this.loading.set(false)))
       .subscribe({
-        next: (response) => this.response.set(response),
+        next: (response) => {
+          this.response.set(response);
+          if (!response.success) {
+            const firstWarning = response.warnings?.[0];
+            this.errorMessage.set(firstWarning ? `${response.message} ${firstWarning}` : response.message);
+          }
+        },
         error: (error: Error) =>
           this.errorMessage.set(error.message || 'Falha ao processar atualização.')
       });

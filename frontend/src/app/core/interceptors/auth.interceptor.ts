@@ -24,7 +24,10 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
     catchError((error: unknown) => {
       if (isApiRequest && error instanceof HttpErrorResponse && error.status === 401) {
         auth.logout();
-        router.navigateByUrl('/login');
+        router.navigate(['/login'], {
+          queryParams: { reason: 'session-expired' },
+          replaceUrl: true
+        });
       }
       return throwError(() => error);
     })

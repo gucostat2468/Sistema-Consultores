@@ -1,7 +1,10 @@
 import { Routes } from '@angular/router';
 import { authGuard } from './core/guards/auth.guard';
-import { admGuard } from './core/guards/adm.guard';
 import { guestGuard } from './core/guards/guest.guard';
+import {
+  financialReceiptsAccessGuard,
+  operationalAccessGuard
+} from './features/pedidos/guards/auth.guard';
 
 export const routes: Routes = [
   {
@@ -42,7 +45,7 @@ export const routes: Routes = [
       },
       {
         path: 'atualizacao',
-        canActivate: [admGuard],
+        canActivate: [operationalAccessGuard],
         loadComponent: () =>
           import('./features/admin-import/pages/admin-import/admin-import.page').then(
             (m) => m.AdminImportPage
@@ -50,10 +53,26 @@ export const routes: Routes = [
       },
       {
         path: 'atualizacao-report',
-        canActivate: [admGuard],
+        canActivate: [operationalAccessGuard],
         loadComponent: () =>
           import('./features/report-import/pages/report-import/report-import.page').then(
             (m) => m.ReportImportPage
+          )
+      },
+      {
+        path: 'status',
+        canActivate: [operationalAccessGuard],
+        loadComponent: () =>
+          import('./features/pedidos/pages/status/status.page').then(
+            (m) => m.StatusPage
+          )
+      },
+      {
+        path: 'comprovantes-financeiros',
+        canActivate: [financialReceiptsAccessGuard],
+        loadComponent: () =>
+          import('./features/pedidos/pages/financial-receipts/financial-receipts.page').then(
+            (m) => m.FinancialReceiptsPage
           )
       },
       { path: '', pathMatch: 'full', redirectTo: 'dashboard' }

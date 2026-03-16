@@ -24,6 +24,7 @@ Veja detalhes em `frontend/README.md`.
 ## Backend API para o Angular
 
 O frontend Angular usa API real em `http://localhost:8000/api`.
+Este projeto opera somente com **FastAPI + Angular** (sem Streamlit).
 
 Rodar API:
 
@@ -134,7 +135,6 @@ Essa abordagem é mais robusta do que criar um sistema separado por vendedor, po
 
 ```
 api.py
-app.py
 scripts/import_pdf.py
 src/auth.py
 src/db.py

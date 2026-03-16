@@ -45,6 +45,46 @@ export interface AdminImportResponse {
   processedAt?: string;
 }
 
+export interface IngestionHistoryFile {
+  id: number;
+  fileName: string;
+  fileType: 'pdf' | 'excel' | string;
+  sourceKind: string;
+  recordCount: number;
+  meta: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface IngestionHistoryItem {
+  id: number;
+  operationId: string;
+  mode: ImportMode | string;
+  actorUsername: string;
+  strictVendors: boolean;
+  appendMode: boolean;
+  status: string;
+  message: string;
+  audit: {
+    newRecords?: number;
+    updatedRecords?: number;
+    ignoredDuplicates?: number;
+    errors?: number;
+    stagedRecords?: number;
+    stagedReceivables?: number;
+    stagedCreditLimits?: number;
+    newCustomers?: number;
+    newTitles?: number;
+    updatedTitles?: number;
+    newCreditLimits?: number;
+    updatedCreditLimits?: number;
+    onlyUpdates?: boolean;
+  };
+  warnings: string[];
+  files: IngestionHistoryFile[];
+  createdAt: string;
+  completedAt: string | null;
+}
+
 export interface AdminClearDataResponse {
   success: boolean;
   message: string;

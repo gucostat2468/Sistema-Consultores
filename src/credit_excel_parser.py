@@ -91,6 +91,7 @@ def parse_credit_excel(
     *,
     parse_all_sheets: bool = True,
     customer_hints: dict[str, dict[str, str | None]] | None = None,
+    default_consultant_name: str | None = None,
 ) -> CreditParseReport:
     excel_path = Path(path)
     sheet_map = load_excel_sheets(excel_path)
@@ -120,6 +121,7 @@ def parse_credit_excel(
             sheet_name,
             default_updated_at=default_updated_at,
             customer_hints=customer_hints or {},
+            default_consultant_name=default_consultant_name,
         )
 
         records.extend(sheet_result.records)
@@ -164,6 +166,7 @@ def parse_credit_worksheet(
     *,
     default_updated_at: str | None,
     customer_hints: dict[str, dict[str, str | None]],
+    default_consultant_name: str | None,
 ) -> _SheetParseResult:
     records: list[CreditLimitRecord] = []
     skipped_rows: list[str] = []
@@ -231,6 +234,8 @@ def parse_credit_worksheet(
         if not consultant_name:
             hint = resolve_customer_hint(customer_name, customer_hints)
             consultant_name = clean_text(hint.get("consultantName"))
+        if not consultant_name and default_consultant_name:
+            consultant_name = clean_text(default_consultant_name)
 
         if not consultant_name:
             skipped_rows.append(f"{sheet_name}!r{row_index}: consultor nao identificado")

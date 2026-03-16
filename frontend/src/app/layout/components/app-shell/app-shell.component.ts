@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { filter } from 'rxjs';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { environment } from '../../../../environments/environment';
 import { Consultant } from '../../../core/models/dashboard.models';
 import { AuthService } from '../../../core/services/auth.service';
 import { DashboardService } from '../../../core/services/dashboard.service';
@@ -24,10 +25,34 @@ export class AppShellComponent {
   readonly user = this.auth.currentUser;
   readonly consultants = signal<Consultant[]>([]);
   readonly selectedConsultantId = signal<number | null>(null);
+  readonly mobileNavOpen = signal(false);
   readonly isAdmin = computed(() => this.user()?.role === 'admin');
-  readonly isAdm = computed(
-    () => this.user()?.role === 'admin' && this.user()?.username.toLowerCase() === 'adm'
-  );
+  readonly isFinancialUser = computed(() => {
+    const usernames = (
+      (environment as { financialUsernames?: string[] }).financialUsernames ?? ['vitor_financeiro']
+    )
+      .map((item) => String(item || '').trim().toLowerCase())
+      .filter(Boolean);
+    const username = String(this.user()?.username || '').trim().toLowerCase();
+    return usernames.includes(username);
+  });
+  readonly isOperationalUser = computed(() => {
+    const usernames = (
+      (environment as { operationalUsernames?: string[] }).operationalUsernames ?? [
+        'isabel',
+        'isabel_dronepro',
+        'marcos',
+        'marcos_dronepro'
+      ]
+    )
+      .map((item) => String(item || '').trim().toLowerCase())
+      .filter(Boolean);
+    const username = String(this.user()?.username || '').trim().toLowerCase();
+    return usernames.includes(username);
+  });
+  readonly canAccessStatus = computed(() => this.isOperationalUser());
+  readonly canAccessReportUpdate = computed(() => this.isOperationalUser());
+  readonly canAccessFinancialReceipts = computed(() => this.isFinancialUser());
   readonly navQueryParams = computed(() => {
     const consultantId = this.selectedConsultantId();
     return consultantId ? { consultantId } : {};
@@ -44,7 +69,13 @@ export class AppShellComponent {
       this.dashboardService
         .getConsultants()
         .pipe(takeUntilDestroyed(this.destroyRef))
-        .subscribe((consultants) => this.consultants.set(consultants));
+        .subscribe({
+          next: (consultants) => this.consultants.set(consultants),
+          error: () => {
+            // Session expiry is handled by auth interceptor; keep shell stable.
+            this.consultants.set([]);
+          }
+        });
     }
 
     this.router.events
@@ -52,7 +83,10 @@ export class AppShellComponent {
         filter((event): event is NavigationEnd => event instanceof NavigationEnd),
         takeUntilDestroyed(this.destroyRef)
       )
-      .subscribe(() => this.refreshRouteTitle());
+      .subscribe(() => {
+        this.refreshRouteTitle();
+        this.closeMobileNav();
+      });
     this.refreshRouteTitle();
   }
 
@@ -71,6 +105,14 @@ export class AppShellComponent {
     });
   }
 
+  toggleMobileNav(): void {
+    this.mobileNavOpen.update((value) => !value);
+  }
+
+  closeMobileNav(): void {
+    this.mobileNavOpen.set(false);
+  }
+
   private refreshRouteTitle(): void {
     const url = this.router.url;
     if (url.includes('/clientes')) {
@@ -83,6 +125,14 @@ export class AppShellComponent {
     }
     if (url.includes('/analise-cliente')) {
       this.routeTitle.set('Analise Cliente');
+      return;
+    }
+    if (url.includes('/status')) {
+      this.routeTitle.set('Status');
+      return;
+    }
+    if (url.includes('/comprovantes-financeiros')) {
+      this.routeTitle.set('Comprovantes Financeiros');
       return;
     }
     if (url.includes('/atualizacao-report')) {

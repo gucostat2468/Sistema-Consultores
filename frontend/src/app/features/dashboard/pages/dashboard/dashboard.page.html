@@ -114,7 +114,7 @@
               <span>Exposicao/Disponivel</span>
               <span>Alerta</span>
             </div>
-            @for (item of topCreditCross; track item.consultantId + '::' + (item.customerCode ?? item.customerName)) {
+            @for (item of topCreditCross; track buildCreditTrackKey(item, $index)) {
               <div class="credit-row">
                 <div>
                   <strong>{{ item.customerName }}</strong>
@@ -140,7 +140,7 @@
           <p>Priorize relacionamento e revisao de limite</p>
         </header>
         <div class="table">
-          @for (client of topClients; track client.consultantId + '::' + client.customerCode) {
+          @for (client of topClients; track buildClientTrackKey(client, $index)) {
             <div class="row">
               <div>
                 <strong>{{ client.customerName }}</strong>
@@ -167,7 +167,7 @@
           @if (criticalClients.length === 0) {
             <p class="empty">Nenhum cliente em alerta no momento.</p>
           } @else {
-            @for (client of criticalClients; track client.consultantId + '::' + client.customerCode) {
+            @for (client of criticalClients; track buildClientTrackKey(client, $index)) {
               <div class="action-item">
                 <div>
                   <strong>{{ client.customerName }}</strong>

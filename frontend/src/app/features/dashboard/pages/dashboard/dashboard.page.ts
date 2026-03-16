@@ -122,14 +122,14 @@ export class DashboardPage {
   get clientStatements(): ClientStatement[] {
     const byClient = new Map<string, ReceivableItem[]>();
     for (const item of this.receivables()) {
-      const key = this.buildClientKey(item.consultantId, item.customerCode);
+      const key = this.buildClientKey(item.consultantId, item.customerCode, item.customerName);
       const current = byClient.get(key) ?? [];
       current.push(item);
       byClient.set(key, current);
     }
 
     return this.clientHealth().map((client) => {
-      const key = this.buildClientKey(client.consultantId, client.customerCode);
+      const key = this.buildClientKey(client.consultantId, client.customerCode, client.customerName);
       const titles = (byClient.get(key) ?? []).sort((a, b) => a.dueDate.localeCompare(b.dueDate));
       const overdueTitles = titles.filter((item) => daysUntil(item.dueDate) < 0);
       const upcomingTitles = titles.filter((item) => daysUntil(item.dueDate) >= 0);
@@ -594,8 +594,35 @@ export class DashboardPage {
     `;
   }
 
-  private buildClientKey(consultantId: number, customerCode: string): string {
-    return `${consultantId}::${customerCode}`;
+  buildClientTrackKey(client: ClientHealth, index: number): string {
+    const key = this.buildClientKey(client.consultantId, client.customerCode, client.customerName);
+    return `${key}::${index}`;
+  }
+
+  buildCreditTrackKey(item: CreditLimitItem, index: number): string {
+    const key = this.buildClientKey(item.consultantId, item.customerCode, item.customerName);
+    return `${key}::${index}`;
+  }
+
+  private buildClientKey(
+    consultantId: number,
+    customerCode: string | null | undefined,
+    customerName: string
+  ): string {
+    const normalizedCode = (customerCode ?? '').trim();
+    if (normalizedCode) {
+      return `${consultantId}::code::${normalizedCode}`;
+    }
+    return `${consultantId}::name::${this.normalizeCustomerKey(customerName)}`;
+  }
+
+  private normalizeCustomerKey(value: string): string {
+    return String(value ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, ' ')
+      .trim();
   }
 
   private escapeHtml(value: string): string {

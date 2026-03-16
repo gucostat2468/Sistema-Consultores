@@ -5,6 +5,7 @@ export interface SessionUser {
   name: string;
   username: string;
   role: UserRole;
+  email?: string | null;
 }
 
 export interface AuthSession {
@@ -16,4 +17,3 @@ export interface LoginPayload {
   username: string;
   password: string;
 }
-

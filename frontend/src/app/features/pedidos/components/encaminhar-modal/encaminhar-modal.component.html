@@ -1,0 +1,95 @@
+@if (visible) {
+  <section class="backdrop" (click)="close()">
+    <article class="modal card" (click)="$event.stopPropagation()">
+      <header class="modal-head">
+        <div>
+          <h3>Encaminhar para Aprovação</h3>
+          <p>{{ client.customerName }} ({{ client.customerCode || 'sem codigo' }})</p>
+        </div>
+        <button type="button" class="ghost" (click)="close()">Fechar</button>
+      </header>
+
+      <form [formGroup]="form" class="form" (ngSubmit)="submit()">
+        <label class="file-input">
+          PDF do pedido
+          <input type="file" accept=".pdf,application/pdf" (change)="onFileSelected($event)" />
+          <span>{{ selectedFile()?.name || 'Nenhum arquivo selecionado' }}</span>
+        </label>
+
+        <div class="grid">
+          <label>
+            Numero do pedido
+            <input type="text" formControlName="orderNumber" maxlength="80" />
+          </label>
+          <label>
+            ID documento do cliente
+            <input type="text" formControlName="customerIdDoc" maxlength="80" />
+          </label>
+          <label class="full">
+            Nome do cliente
+            <input type="text" formControlName="customerName" maxlength="220" />
+          </label>
+          <label>
+            Valor do pedido (R$)
+            <input
+              type="number"
+              formControlName="orderValue"
+              min="0.01"
+              step="0.01"
+              [class.input-invalid]="!!orderValueError()"
+            />
+            <span class="field-hint">Informe o valor real do pedido ou use "Extrair campos do PDF".</span>
+            @if (orderValueError(); as message) {
+              <span class="field-error">{{ message }}</span>
+            }
+          </label>
+          <label class="full">
+            E-mails para envio da solicitação (opcional, separar por vírgula)
+            <input
+              type="text"
+              formControlName="recipientEmails"
+              placeholder="cliente@empresa.com, financeiro@empresa.com"
+              [class.input-invalid]="!!recipientEmailsError()"
+            />
+            <span class="field-hint">Se preencher, o sistema envia também para estes destinatários.</span>
+            @if (recipientEmailsError(); as message) {
+              <span class="field-error">{{ message }}</span>
+            }
+          </label>
+          <label class="full checkbox-row">
+            <input type="checkbox" formControlName="attachClientAnalysis" />
+            <span>Anexar relatório de saúde financeira do cliente junto ao pedido</span>
+          </label>
+        </div>
+
+        <div class="actions">
+          <button type="button" class="ghost" (click)="extractFromPdf()" [disabled]="extracting() || !selectedFile()">
+            @if (extracting()) {
+              Extraindo...
+            } @else {
+              Extrair campos do PDF
+            }
+          </button>
+          <button type="submit" [disabled]="loading()">
+            @if (loading()) {
+              Encaminhando...
+            } @else {
+              Encaminhar pedido
+            }
+          </button>
+        </div>
+      </form>
+
+      @if (errorMessage()) {
+        <section class="feedback error">
+          <p>{{ errorMessage() }}</p>
+        </section>
+      }
+      @if (successMessage()) {
+        <section class="feedback success">
+          <p>{{ successMessage() }}</p>
+        </section>
+      }
+    </article>
+  </section>
+}

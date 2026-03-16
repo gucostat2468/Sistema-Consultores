@@ -1,0 +1,78 @@
+@if (loading()) {
+  <section class="card state">
+    <p>Carregando comprovantes financeiros...</p>
+  </section>
+} @else {
+  <section class="card intro">
+    <h2>Comprovantes Financeiros</h2>
+    <p>Pedidos aprovados com assinatura digital e comprovante pronto para auditoria e download.</p>
+  </section>
+
+  <section class="card filters">
+    <div class="grid">
+      <label>
+        Cliente
+        <input
+          type="text"
+          [ngModel]="customerFilter()"
+          (ngModelChange)="customerFilter.set($event)"
+          placeholder="Filtrar por empresa"
+        />
+      </label>
+      <label>
+        De
+        <input type="date" [ngModel]="dateFrom()" (ngModelChange)="dateFrom.set($event)" />
+      </label>
+      <label>
+        Até
+        <input type="date" [ngModel]="dateTo()" (ngModelChange)="dateTo.set($event)" />
+      </label>
+    </div>
+    <div class="actions">
+      <button type="button" class="ghost" (click)="clearFilters()">Limpar</button>
+      <button type="button" (click)="applyFilters()">Aplicar filtros</button>
+    </div>
+  </section>
+
+  @if (errorMessage()) {
+    <section class="card state state-error">
+      <p>{{ errorMessage() }}</p>
+    </section>
+  }
+
+  <section class="card table-card">
+    <table>
+      <thead>
+        <tr>
+          <th>Pedido</th>
+          <th>Cliente</th>
+          <th>Status</th>
+          <th>Responsável assinatura</th>
+          <th>Assinado em</th>
+          <th>Atualizado</th>
+          <th>Ações</th>
+        </tr>
+      </thead>
+      <tbody>
+        @if (items().length === 0) {
+          <tr><td colspan="7">Nenhum comprovante encontrado para os filtros atuais.</td></tr>
+        } @else {
+          @for (item of items(); track item.id) {
+            <tr>
+              <td>{{ item.orderNumber }}</td>
+              <td>{{ item.customerName }}</td>
+              <td>{{ item.status }}</td>
+              <td>{{ item.signedByName || '-' }}</td>
+              <td>{{ item.signedAt ? (item.signedAt | date: 'short') : '-' }}</td>
+              <td>{{ item.updatedAt | date: 'short' }}</td>
+              <td>
+                <button type="button" (click)="download(item)">Download</button>
+              </td>
+            </tr>
+          }
+        }
+      </tbody>
+    </table>
+  </section>
+}
+

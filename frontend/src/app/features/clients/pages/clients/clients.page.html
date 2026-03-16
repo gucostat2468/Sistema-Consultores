@@ -15,6 +15,12 @@
   </label>
 </section>
 
+@if (orderFeedback()) {
+  <section class="card state state-success">
+    <p>{{ orderFeedback() }}</p>
+  </section>
+}
+
 <section class="card table-card">
   @if (loading()) {
     <p class="state">Carregando clientes...</p>
@@ -30,9 +36,9 @@
       <span>Score</span>
       <span>Situacao</span>
       <span>Analise</span>
-      <span>Acao</span>
+      <span>Aprovacao</span>
     </div>
-    @for (client of filtered; track buildClientKey(client)) {
+    @for (client of filtered; track buildClientTrackKey(client, $index)) {
       <div class="table-row">
         <div>
           <strong>{{ client.customerName }}</strong>
@@ -52,8 +58,31 @@
         >
           Ver graficos
         </a>
-        <p>{{ client.action }}</p>
+        <div class="approval-cell">
+          <p class="client-action">{{ client.action }}</p>
+          @if (hasCreditLimit(client)) {
+            <span class="approval-chip approval-ok">Com limite</span>
+          } @else {
+            <span class="approval-chip approval-no-limit">Sem limite - entra como negativo</span>
+          }
+          @if (canForwardOrder()) {
+            <button type="button" class="approval-btn" (click)="openForwardModal(client)">
+              Encaminhar pedido
+            </button>
+          } @else {
+            <span class="approval-chip approval-neutral">Apenas Marcos/Isabel podem encaminhar</span>
+          }
+        </div>
       </div>
     }
   }
 </section>
+
+@if (modalClient(); as selectedClient) {
+  <app-encaminhar-modal
+    [visible]="true"
+    [client]="selectedClient"
+    (closed)="closeForwardModal()"
+    (forwarded)="onOrderForwarded()"
+  />
+}

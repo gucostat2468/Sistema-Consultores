@@ -11,7 +11,7 @@ export const admGuard: CanActivateFn = () => {
     return router.createUrlTree(['/login']);
   }
 
-  const allowed = user.role === 'admin' && user.username.toLowerCase() === 'adm';
+  const allowed = user.role === 'admin';
   if (allowed) {
     return true;
   }

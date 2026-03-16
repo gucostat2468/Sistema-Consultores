@@ -18,6 +18,7 @@ import {
   evaluateCreditMetrics,
   findCreditItem,
 } from '../../../../shared/utils/credit-metrics';
+import { EncaminharModalComponent } from '../../../pedidos/components/encaminhar-modal/encaminhar-modal.component';
 
 interface ExposureBucket {
   label: string;
@@ -68,7 +69,7 @@ interface CreditDebtSnapshot {
   used: number;
   gap: number;
   debtToLimitRatio: number;
-  debtToAvailableRatio: number;
+  debtToAvailableRatio: number | null;
   coverageRatio: number;
   hasRealLimit: boolean;
   sourceLabel: string;
@@ -91,7 +92,7 @@ interface TopTitleItem extends ReceivableItem {
 
 @Component({
   selector: 'app-client-analysis-page',
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, EncaminharModalComponent],
   templateUrl: './client-analysis.page.html',
   styleUrl: './client-analysis.page.scss'
 })
@@ -111,6 +112,8 @@ export class ClientAnalysisPage {
   readonly selectedClientKey = signal<string | null>(null);
   readonly showCreditOnboarding = signal(true);
   readonly creditLookup = computed(() => buildCreditLookupMaps(this.creditItems()));
+  readonly modalOpen = signal(false);
+  readonly orderFeedback = signal<string | null>(null);
 
   readonly clientOptions = computed(() =>
     this.clients().map((item) => ({
@@ -199,9 +202,9 @@ export class ClientAnalysisPage {
     const debtFuture = Math.max(debtTotal - debtOverdue, 0);
     const gap = Math.max(debtTotal - available, 0);
     const debtToLimitRatio = metrics.debtToLimitRatio;
-    const debtToAvailableRatio = available > 0 ? debtTotal / available : debtTotal > 0 ? 9.99 : 0;
+    const debtToAvailableRatio = available > 0 ? debtTotal / available : null;
     const coverageRatio = metrics.coverageRatio;
-    const alert = this.classifyDebtCreditAlert(debtTotal, available, debtOverdue);
+    const alert = this.classifyDebtCreditAlert(debtTotal, available, debtOverdue, limitTotal);
     return {
       receivablesOpen: debtTotal,
       debtTotal,
@@ -247,12 +250,17 @@ export class ClientAnalysisPage {
     let priorityClass: CreditOnboarding['priorityClass'] = 'guide-priority-ok';
     let actionStory = 'Cenario controlado para continuidade das propostas com monitoramento padrao.';
 
-    if (panel.gap > 0 || panel.debtToAvailableRatio > 1 || pressure >= 0.35) {
+    if (
+      panel.gap > 0 ||
+      panel.debtToLimitRatio >= 0.9 ||
+      (panel.debtToAvailableRatio !== null && panel.debtToAvailableRatio > 1) ||
+      pressure >= 0.35
+    ) {
       priorityLabel = 'Atencao';
       priorityClass = 'guide-priority-attention';
       actionStory = 'Segurar novas condicoes agressivas e acompanhar recebimentos de curto prazo.';
     }
-    if (panel.debtOverdue > 0 || panel.alert === 'Acima do limite' || panel.alert === 'Sem limite livre') {
+    if (panel.debtOverdue > 0 || panel.alert === 'Acima do limite' || panel.debtToLimitRatio > 1.02) {
       priorityLabel = 'Critica';
       priorityClass = 'guide-priority-critical';
       actionStory = 'Priorizar cobranca/renegociacao antes de ampliar limite ou nova proposta comercial.';
@@ -350,6 +358,28 @@ export class ClientAnalysisPage {
     this.showCreditOnboarding.update((value) => !value);
   }
 
+  selectedClientHasLimit(): boolean {
+    const credit = this.selectedCreditItem();
+    return Boolean(credit && credit.creditLimit > 0);
+  }
+
+  openForwardModal(): void {
+    if (!this.selectedClient()) {
+      return;
+    }
+    this.orderFeedback.set(null);
+    this.modalOpen.set(true);
+  }
+
+  closeForwardModal(): void {
+    this.modalOpen.set(false);
+  }
+
+  onOrderForwarded(): void {
+    this.modalOpen.set(false);
+    this.orderFeedback.set('Pedido registrado. Acompanhe a assinatura e distribuição na sessão Status.');
+  }
+
   toneClass(tone: 'overdue' | 'near' | 'mid' | 'future'): string {
     return `tone tone-${tone}`;
   }
@@ -405,6 +435,20 @@ export class ClientAnalysisPage {
       return 'Sem necessidade adicional de limite.';
     }
     return 'Necessidade para cobrir 100% da divida atual.';
+  }
+
+  debtToAvailableLabel(panel: CreditDebtSnapshot): string {
+    if (panel.debtToAvailableRatio === null) {
+      return panel.debtTotal > 0 ? 'Sem limite livre' : 'Sem exposicao';
+    }
+    return this.percent(panel.debtToAvailableRatio);
+  }
+
+  debtToAvailableHint(panel: CreditDebtSnapshot): string {
+    if (panel.debtToAvailableRatio === null) {
+      return `${this.currency(panel.debtTotal)} sobre ${this.currency(panel.available)} (sem folga no momento)`;
+    }
+    return `${this.currency(panel.debtTotal)} sobre ${this.currency(panel.available)}`;
   }
 
   creditExposureWidth(ratio: number): number {
@@ -579,17 +623,25 @@ export class ClientAnalysisPage {
     return 'no-data';
   }
 
-  private classifyDebtCreditAlert(totalDebt: number, available: number, overdue: number): CreditAlert {
+  private classifyDebtCreditAlert(
+    totalDebt: number,
+    available: number,
+    overdue: number,
+    limitTotal: number
+  ): CreditAlert {
     if (totalDebt <= 0) {
       return 'Sem exposicao';
     }
-    if (available <= 0) {
+    if (limitTotal <= 0 && available <= 0) {
       return 'Sem limite livre';
     }
-    if (totalDebt > available) {
+    if (limitTotal > 0 && totalDebt > limitTotal) {
       return 'Acima do limite';
     }
-    if (totalDebt >= available * 0.8 || overdue > 0) {
+    if (available <= 0) {
+      return 'Atencao';
+    }
+    if ((limitTotal > 0 && totalDebt >= limitTotal * 0.85) || overdue > 0) {
       return 'Atencao';
     }
     return 'Controlado';

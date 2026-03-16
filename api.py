@@ -1,15 +1,28 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import date, datetime
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from email.message import EmailMessage
+from io import BytesIO
 from pathlib import Path
+import base64
+import hashlib
+import json
+import os
 import re
 import secrets
+import smtplib
+import ssl
 import tempfile
+import time
 import unicodedata
 import uuid
 
 import pandas as pd
+from pypdf import PdfReader, PdfWriter
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen import canvas
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -23,9 +36,12 @@ from src.db import (
     fetch_document_consultant_hints,
     fetch_credit_limits_for_user,
     fetch_receivables_for_user,
+    get_connection,
+    get_consultant_by_id,
     import_credit_limits,
     import_receivables,
     init_db,
+    list_active_admin_users,
     list_ingestion_batches,
     list_consultants,
     register_ingestion_file,
@@ -34,6 +50,7 @@ from src.db import (
     stage_credit_limit_records,
     stage_receivables_records,
     start_ingestion_batch,
+    update_consultant_email,
 )
 from src.credit_excel_parser import parse_credit_excel
 from src.metrics import (
@@ -46,16 +63,23 @@ from src.metrics import (
 )
 from src.pdf_parser import parse_pdf
 from src.receivables_excel_parser import parse_receivables_excel
+from src.auth import hash_password
 from src.update_validation import (
     EXPECTED_CONSULTANTS,
     validate_credit_parse_report,
     validate_excel_receivables_parse_report,
     validate_parse_report,
+    validate_report_v1_workbook_layout,
 )
 
 
 DEFAULT_CONSULTANT_PASSWORD = "Consultor@123"
 DEFAULT_ADMIN_PASSWORD = "Admin@123"
+DEFAULT_ORDER_ADMIN_PASSWORD = os.getenv("ORDER_ADMIN_PASSWORD", "drone2026")
+DEFAULT_ISABEL_PASSWORD = os.getenv("ISABEL_PASSWORD", DEFAULT_ORDER_ADMIN_PASSWORD)
+DEFAULT_MARCOS_PASSWORD = os.getenv("MARCOS_PASSWORD", DEFAULT_ORDER_ADMIN_PASSWORD)
+VITOR_FINANCIAL_USERNAME = os.getenv("VITOR_FINANCIAL_USERNAME", "vitor_financeiro").strip().lower()
+DEFAULT_VITOR_FINANCIAL_PASSWORD = os.getenv("VITOR_FINANCIAL_PASSWORD", "dronepro2026")
 DEFAULT_REPORT_CONSULTANT = "CARTEIRA GERAL (SEM CONSULTOR)"
 TOKEN_STORE: dict[str, AuthenticatedUser] = {}
 
@@ -74,6 +98,113 @@ FRONTEND_DIST_DIR = next(
 )
 FRONTEND_INDEX_FILE = FRONTEND_DIST_DIR / "index.html"
 
+ORDER_STORAGE_DIR = BASE_DIR / "data" / "order_approval"
+ORDER_ORIGINAL_DIR = ORDER_STORAGE_DIR / "original"
+ORDER_SIGNED_DIR = ORDER_STORAGE_DIR / "signed"
+ORDER_SIGNATURE_DIR = ORDER_STORAGE_DIR / "signatures"
+ORDER_ANALYSIS_DIR = ORDER_STORAGE_DIR / "analysis"
+ORDER_PACKAGE_DIR = ORDER_STORAGE_DIR / "packages"
+for _path in [
+    ORDER_STORAGE_DIR,
+    ORDER_ORIGINAL_DIR,
+    ORDER_SIGNED_DIR,
+    ORDER_SIGNATURE_DIR,
+    ORDER_ANALYSIS_DIR,
+    ORDER_PACKAGE_DIR,
+]:
+    _path.mkdir(parents=True, exist_ok=True)
+
+ORDER_SIGNATURE_MODE = os.getenv("ORDER_SIGNATURE_MODE", "canvas").strip().lower()
+if ORDER_SIGNATURE_MODE not in {"canvas", "hash"}:
+    ORDER_SIGNATURE_MODE = "canvas"
+ORDER_SIGNATURE_SECRET = os.getenv("ORDER_SIGNATURE_SECRET", "trocar-assinatura-em-producao")
+ORDER_MAX_PDF_BYTES = int(os.getenv("ORDER_MAX_PDF_BYTES", str(10 * 1024 * 1024)))
+ORDER_APPROVAL_PANEL_URL = os.getenv(
+    "ORDER_APPROVAL_PANEL_URL",
+    "http://localhost:4200/app/status",
+)
+ISABEL_USERNAME = os.getenv("ISABEL_USERNAME", "Isabel_Dronepro").strip().lower()
+MARCOS_USERNAME = os.getenv("MARCOS_USERNAME", "Marcos_Dronepro").strip().lower()
+DEFAULT_OPERATIONAL_USERNAMES = {
+    "isabel",
+    "isabel_dronepro",
+    "marcos",
+    "marcos_dronepro",
+}
+EXTRA_OPERATIONAL_USERNAMES = {
+    str(item or "").strip().lower()
+    for item in os.getenv("OPERATIONAL_USERNAMES", "").split(",")
+    if str(item or "").strip()
+}
+OPERATIONAL_USERNAMES = {
+    username
+    for username in (
+        DEFAULT_OPERATIONAL_USERNAMES
+        | EXTRA_OPERATIONAL_USERNAMES
+        | {ISABEL_USERNAME, MARCOS_USERNAME}
+    )
+    if username
+}
+
+DEFAULT_FINANCIAL_USERNAMES = {
+    "vitor_financeiro",
+}
+EXTRA_FINANCIAL_USERNAMES = {
+    str(item or "").strip().lower()
+    for item in os.getenv("FINANCIAL_USERNAMES", "").split(",")
+    if str(item or "").strip()
+}
+FINANCIAL_USERNAMES = {
+    username
+    for username in (
+        DEFAULT_FINANCIAL_USERNAMES
+        | EXTRA_FINANCIAL_USERNAMES
+        | {VITOR_FINANCIAL_USERNAME}
+    )
+    if username
+}
+
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USERNAME = os.getenv("SMTP_USERNAME", "").strip() or None
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip() or None
+SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").strip().lower() in {"1", "true", "yes", "on", "sim"}
+SMTP_TLS_VERIFY = os.getenv("SMTP_TLS_VERIFY", "true").strip().lower() in {"1", "true", "yes", "on", "sim"}
+SMTP_TLS_ALLOW_INSECURE_FALLBACK = os.getenv("SMTP_TLS_ALLOW_INSECURE_FALLBACK", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+    "sim",
+}
+SMTP_MAX_RETRIES = max(1, int(os.getenv("SMTP_MAX_RETRIES", "3")))
+SMTP_RETRY_BACKOFF_SECONDS = max(0.0, float(os.getenv("SMTP_RETRY_BACKOFF_SECONDS", "1.2")))
+SMTP_FALLBACK_HOSTS = [
+    host.strip()
+    for host in os.getenv("SMTP_FALLBACK_HOSTS", "").split(",")
+    if host.strip()
+]
+SMTP_FROM = os.getenv("SMTP_FROM", "no-reply@dronepro.local").strip()
+
+ORDER_STATUS_AWAITING_SIGNATURE = "AGUARDANDO_ASSINATURA_ISABEL"
+ORDER_STATUS_NEGATIVE = "NEGADO_SEM_LIMITE"
+ORDER_STATUS_RETURNED = "DEVOLVIDO_REVISAO"
+ORDER_STATUS_SIGNED_DISTRIBUTING = "ASSINADO_AGUARDANDO_DISTRIBUICAO"
+ORDER_STATUS_DONE = "CONCLUIDO"
+ORDER_STATUS_BILLED = "FATURADO"
+ORDER_STATUS_DELETED = "EXCLUIDO"
+ORDER_STATUS_ALL = {
+    ORDER_STATUS_AWAITING_SIGNATURE,
+    ORDER_STATUS_NEGATIVE,
+    ORDER_STATUS_RETURNED,
+    ORDER_STATUS_SIGNED_DISTRIBUTING,
+    ORDER_STATUS_DONE,
+    ORDER_STATUS_BILLED,
+    ORDER_STATUS_DELETED,
+}
+
+EMAIL_REGEX = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+
 
 def to_bool(value: str | bool) -> bool:
     if isinstance(value, bool):
@@ -83,6 +214,11 @@ def to_bool(value: str | bool) -> bool:
 
 def cents_to_brl(value: int | float) -> float:
     return round(float(value) / 100.0, 2)
+
+
+def format_brl_from_cents(value_cents: int | float) -> str:
+    value = cents_to_brl(value_cents)
+    return f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 def strip_status(status: str) -> str:
@@ -106,6 +242,29 @@ def normalize_loose_customer_name_key(value: str | None) -> str:
     base = normalize_customer_key(value)
     reduced = re.sub(r"[^A-Z0-9]+", " ", base)
     return " ".join(reduced.split())
+
+
+GENERIC_CUSTOMER_LOOKUP_KEYS = {
+    "ENDERECO",
+    "ENDERECO DO CLIENTE",
+    "CLIENTE",
+    "NOME",
+    "NOME DO CLIENTE",
+    "RAZAO SOCIAL",
+    "RAZAO SOCIAL DO CLIENTE",
+}
+
+
+def is_generic_customer_lookup_name(value: str | None) -> bool:
+    key = normalize_loose_customer_name_key(value)
+    if not key:
+        return True
+    if key in GENERIC_CUSTOMER_LOOKUP_KEYS:
+        return True
+    # Captura variações comuns vindas de extração ruim de PDF.
+    if key.startswith("ENDERECO ") or key.endswith(" ENDERECO"):
+        return True
+    return False
 
 
 def sanitize_company_name(value: str | None) -> str:
@@ -135,18 +294,104 @@ def parse_iso_date(value: str | None) -> date | None:
         return None
 
 
-def classify_credit_alert(exposure_cents: int, available_cents: int) -> str:
-    if exposure_cents <= 0 and available_cents > 0:
-        return "Sem exposicao"
-    if exposure_cents > 0 and available_cents <= 0:
-        return "Sem limite livre"
-    if available_cents <= 0:
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def brl_to_cents(value: float | Decimal | int) -> int:
+    decimal_value = Decimal(str(value))
+    return int((decimal_value * 100).quantize(Decimal("1")))
+
+
+def normalize_email_value(value: str | None) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    if not EMAIL_REGEX.match(text):
+        raise HTTPException(status_code=400, detail=f"E-mail invalido: {text}")
+    return text
+
+
+def split_email_targets(value: str | None) -> list[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+    tokens = [item.strip().lower() for item in re.split(r"[;,]", raw) if item.strip()]
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        normalized = normalize_email_value(token)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            deduped.append(normalized)
+    return deduped
+
+
+def normalize_email_targets(value: str | None) -> str:
+    return ", ".join(split_email_targets(value))
+
+
+def build_order_external_id() -> str:
+    return f"ORD-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8].upper()}"
+
+
+def parse_brl_number(value: str | None) -> float | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    clean = (
+        text.replace("R$", "")
+        .replace(" ", "")
+        .replace("\u00a0", "")
+        .replace(".", "")
+        .replace(",", ".")
+    )
+    try:
+        return float(clean)
+    except ValueError:
+        return None
+
+
+def decode_canvas_signature(payload: str | None) -> bytes | None:
+    if not payload:
+        return None
+    raw = payload.strip()
+    if raw.startswith("data:"):
+        parts = raw.split(",", 1)
+        if len(parts) != 2:
+            return None
+        raw = parts[1]
+    try:
+        return base64.b64decode(raw, validate=True)
+    except Exception:
+        return None
+
+
+def hash_order_signature(*, pdf_bytes: bytes, order_number: str, signed_by: str, signed_at_iso: str) -> str:
+    digest = hashlib.sha256()
+    digest.update(pdf_bytes)
+    digest.update(order_number.encode("utf-8"))
+    digest.update(signed_by.encode("utf-8"))
+    digest.update(signed_at_iso.encode("utf-8"))
+    digest.update(ORDER_SIGNATURE_SECRET.encode("utf-8"))
+    return digest.hexdigest()
+
+
+def classify_credit_alert(exposure_cents: int, available_cents: int, limit_cents: int) -> str:
+    if exposure_cents <= 0:
+        if available_cents > 0 or limit_cents > 0:
+            return "Sem exposicao"
         return "Sem dados"
 
-    ratio = safe_ratio(exposure_cents, available_cents)
-    if ratio > 1:
+    if limit_cents <= 0:
+        return "Sem limite livre"
+
+    debt_to_limit_ratio = safe_ratio(exposure_cents, limit_cents)
+    if debt_to_limit_ratio > 1.0:
         return "Acima do limite"
-    if ratio >= 0.8:
+    if available_cents <= 0:
+        return "Atencao"
+    if debt_to_limit_ratio >= 0.85:
         return "Atencao"
     return "Controlado"
 
@@ -173,6 +418,7 @@ def build_auth_session(user: AuthenticatedUser) -> dict:
             "name": user.name,
             "username": user.username,
             "role": "admin" if user.is_admin else "consultor",
+            "email": user.email,
         },
     }
 
@@ -190,6 +436,40 @@ def get_current_user_from_header(authorization: str | None) -> AuthenticatedUser
     return user
 
 
+def ensure_admin(user: AuthenticatedUser) -> None:
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Acesso exclusivo de administrador.")
+
+
+def is_operational_username(username: str | None) -> bool:
+    return str(username or "").strip().lower() in OPERATIONAL_USERNAMES
+
+
+def is_financial_username(username: str | None) -> bool:
+    return str(username or "").strip().lower() in FINANCIAL_USERNAMES
+
+
+def ensure_operational_user(user: AuthenticatedUser) -> None:
+    if is_operational_username(user.username):
+        return
+    raise HTTPException(status_code=403, detail="Acesso restrito a Marcos e Isabel.")
+
+
+def ensure_isabel(user: AuthenticatedUser) -> None:
+    if user.username.strip().lower() != ISABEL_USERNAME:
+        raise HTTPException(status_code=403, detail="Acesso exclusivo da Isabel.")
+
+
+def ensure_status_access(user: AuthenticatedUser) -> None:
+    ensure_operational_user(user)
+
+
+def ensure_financial_receipts_access(user: AuthenticatedUser) -> None:
+    if is_financial_username(user.username):
+        return
+    raise HTTPException(status_code=403, detail="Acesso exclusivo do perfil Vitor Financeiro.")
+
+
 def rows_to_dataframe(rows: list[dict]) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()
@@ -204,7 +484,131 @@ def map_financial_status(status: str) -> str:
     return "Saudavel"
 
 
-def build_client_health_for_api(df: pd.DataFrame) -> list[dict]:
+def build_credit_lookup_for_client_health(credit_rows: list[dict]) -> dict[tuple[int, str], dict]:
+    lookup: dict[tuple[int, str], dict] = {}
+    for row in credit_rows:
+        consultant_id = int(row.get("consultant_id") or 0)
+        if consultant_id <= 0:
+            continue
+        customer_name = sanitize_company_name(str(row.get("customer_name") or ""))
+        key = (consultant_id, normalize_customer_key(customer_name))
+        limit_cents = int(row.get("credit_limit_cents") or 0)
+        used_cents = int(row.get("credit_used_cents") or 0)
+        available_cents = int(row.get("credit_available_cents") or 0)
+        current = lookup.get(key)
+        if current is None:
+            lookup[key] = {
+                "creditLimitCents": limit_cents,
+                "creditUsedCents": used_cents,
+                "creditAvailableCents": available_cents,
+            }
+            continue
+        # Duplicates can appear in imported sheets; keep the strongest registered values.
+        current["creditLimitCents"] = max(int(current.get("creditLimitCents") or 0), limit_cents)
+        current["creditUsedCents"] = max(int(current.get("creditUsedCents") or 0), used_cents)
+        current["creditAvailableCents"] = max(int(current.get("creditAvailableCents") or 0), available_cents)
+    return lookup
+
+
+def evaluate_credit_penalty_for_client(
+    *,
+    total_balance_cents: int,
+    overdue_ratio: float,
+    due_15_ratio: float,
+    credit_snapshot: dict | None,
+) -> dict:
+    limit_cents = int((credit_snapshot or {}).get("creditLimitCents") or 0)
+    used_cents = int((credit_snapshot or {}).get("creditUsedCents") or 0)
+    available_cents = int((credit_snapshot or {}).get("creditAvailableCents") or 0)
+    has_limit = limit_cents > 0
+
+    if total_balance_cents <= 0:
+        return {
+            "penalty": 0.0,
+            "hasLimit": has_limit,
+            "creditLimitCents": limit_cents,
+            "creditUsedCents": used_cents,
+            "creditAvailableCents": available_cents,
+            "coverageRatio": 1.0,
+            "debtToLimitRatio": 0.0,
+            "maxScoreCap": 100,
+            "flags": [],
+        }
+
+    if not has_limit:
+        debt_scale = max(0.0, min(1.0, total_balance_cents / float(brl_to_cents(2_500_000))))
+        penalty = 11.0 + debt_scale * 9.0 + overdue_ratio * 6.0 + due_15_ratio * 4.0
+        cap = 70 if overdue_ratio < 0.08 else 62
+        return {
+            "penalty": penalty,
+            "hasLimit": False,
+            "creditLimitCents": 0,
+            "creditUsedCents": 0,
+            "creditAvailableCents": 0,
+            "coverageRatio": 0.0,
+            "debtToLimitRatio": 9.99,
+            "maxScoreCap": cap,
+            "flags": ["sem_limite_cadastrado"],
+        }
+
+    debt_to_limit_ratio = safe_ratio(total_balance_cents, limit_cents)
+    inferred_available_cents = max(0, limit_cents - total_balance_cents)
+    effective_available_cents = max(available_cents, inferred_available_cents)
+    coverage_ratio = safe_ratio(effective_available_cents, total_balance_cents)
+    used_ratio = safe_ratio(used_cents, limit_cents)
+
+    limit_pressure = max(0.0, min(1.0, (debt_to_limit_ratio - 0.90) / 0.80))
+    coverage_deficit = max(0.0, min(1.0, 1.0 - coverage_ratio))
+    high_usage_pressure = max(0.0, min(1.0, (used_ratio - 0.85) / 0.15))
+    over_limit_pressure = max(0.0, min(1.0, (debt_to_limit_ratio - 1.0) / 0.8))
+    no_available = 1.0 if effective_available_cents <= 0 and debt_to_limit_ratio > 1.0 else 0.0
+
+    # Disponível zerado não deve derrubar score de forma extrema quando a dívida
+    # ainda está dentro do limite e sem atraso relevante.
+    coverage_weight = 8.0
+    if debt_to_limit_ratio <= 1.0 and overdue_ratio < 0.03:
+        coverage_weight = 2.5
+    if debt_to_limit_ratio <= 0.90 and overdue_ratio < 0.03:
+        coverage_weight = 1.8
+
+    penalty = (
+        limit_pressure * 10.0
+        + coverage_deficit * coverage_weight
+        + high_usage_pressure * 4.0
+        + over_limit_pressure * 8.0
+        + no_available * 6.0
+        + overdue_ratio * 2.0
+    )
+    if debt_to_limit_ratio <= 0.75 and overdue_ratio < 0.05:
+        penalty = max(0.0, penalty - 3.0)
+
+    flags: list[str] = []
+    score_cap = 100
+    if effective_available_cents <= 0 and debt_to_limit_ratio >= 1.35:
+        flags.append("sem_limite_livre")
+        score_cap = 60
+    elif debt_to_limit_ratio > 1.05 and coverage_ratio < 0.35:
+        flags.append("cobertura_baixa")
+        score_cap = 68
+
+    return {
+        "penalty": penalty,
+        "hasLimit": True,
+        "creditLimitCents": limit_cents,
+        "creditUsedCents": used_cents,
+        "creditAvailableCents": effective_available_cents,
+        "coverageRatio": coverage_ratio,
+        "debtToLimitRatio": debt_to_limit_ratio,
+        "maxScoreCap": score_cap,
+        "flags": flags,
+    }
+
+
+def build_client_health_for_api(
+    df: pd.DataFrame,
+    *,
+    credit_rows: list[dict] | None = None,
+) -> list[dict]:
     if df.empty:
         return []
 
@@ -212,6 +616,7 @@ def build_client_health_for_api(df: pd.DataFrame) -> list[dict]:
     if "customer_name" in enriched.columns:
         enriched = enriched.copy()
         enriched["customer_name"] = enriched["customer_name"].map(sanitize_company_name)
+    credit_lookup = build_credit_lookup_for_client_health(credit_rows or [])
     records: list[dict] = []
 
     for keys, group in enriched.groupby(
@@ -313,16 +718,28 @@ def build_client_health_for_api(df: pd.DataFrame) -> list[dict]:
 
         base_penalty = (
             overdue_severity * 60.0
-            + near_pressure * 18.0
-            + title_stress * 8.0
-            + concentration_risk * 8.0
+            + near_pressure * 14.0
+            + title_stress * 6.0
+            + concentration_risk * 6.0
             + trajectory_risk * 6.0
         )
         escalation_penalty = (
             max(0.0, overdue_ratio - 0.35) * 35.0
             + max(0.0, severe_overdue_ratio - 0.2) * 20.0
         )
-        risk_score = int(round(max(0.0, min(100.0, 100.0 - base_penalty - escalation_penalty))))
+
+        credit_key = (int(consultant_id), normalize_customer_key(str(customer_name or "")))
+        credit_eval = evaluate_credit_penalty_for_client(
+            total_balance_cents=total_balance_cents,
+            overdue_ratio=overdue_ratio,
+            due_15_ratio=due_15_ratio,
+            credit_snapshot=credit_lookup.get(credit_key),
+        )
+        raw_score = 100.0 - base_penalty - escalation_penalty - float(credit_eval["penalty"])
+        risk_score = int(round(max(0.0, min(100.0, raw_score))))
+        score_cap = int(credit_eval["maxScoreCap"])
+        if score_cap < 100:
+            risk_score = min(risk_score, score_cap)
 
         financial_status = classify_financial_status(
             risk_score=risk_score,
@@ -331,11 +748,26 @@ def build_client_health_for_api(df: pd.DataFrame) -> list[dict]:
             severe_overdue_ratio=severe_overdue_ratio,
         )
         mapped_status = map_financial_status(financial_status)
-        action = {
-            "Critico": "Contato imediato e plano de renegociacao antes de novas propostas.",
-            "Atencao": "Contato preventivo para vencimentos proximos e revisao de limite.",
-            "Saudavel": "Cliente apto para novas propostas com monitoramento padrao.",
-        }[mapped_status]
+        has_limit = bool(credit_eval["hasLimit"])
+        coverage_ratio = float(credit_eval["coverageRatio"])
+        debt_to_limit_ratio = float(credit_eval["debtToLimitRatio"])
+        credit_available_cents = int(credit_eval["creditAvailableCents"])
+        if not has_limit and total_balance_cents > 0:
+            action = "Cliente sem limite cadastrado. Priorizar cadastro/revisao de limite antes de novas propostas."
+        elif has_limit and debt_to_limit_ratio > 1.0 and total_balance_cents > 0:
+            action = "Exposicao acima do limite de credito. Priorizar revisao de limite e tratativa comercial."
+        elif has_limit and credit_available_cents <= 0 and overdue_ratio <= 0.01 and total_balance_cents > 0:
+            action = "Limite totalmente utilizado no momento (sem folga), porem sem atraso relevante."
+        elif has_limit and credit_available_cents <= 0 and total_balance_cents > 0:
+            action = "Limite totalmente utilizado com pressao financeira. Reforcar cobranca preventiva e revisao de limite."
+        elif has_limit and debt_to_limit_ratio >= 0.85 and total_balance_cents > 0:
+            action = "Limite proximo do teto de uso. Acompanhar recebimentos e revisar novas concessoes."
+        else:
+            action = {
+                "Critico": "Contato imediato e plano de renegociacao antes de novas propostas.",
+                "Atencao": "Contato preventivo para vencimentos proximos e revisao de limite.",
+                "Saudavel": "Cliente apto para novas propostas com monitoramento padrao.",
+            }[mapped_status]
 
         records.append(
             {
@@ -351,6 +783,18 @@ def build_client_health_for_api(df: pd.DataFrame) -> list[dict]:
                 "score": risk_score,
                 "status": mapped_status,
                 "action": action,
+                "scoreModel": {
+                    "basePenalty": float(round(base_penalty, 2)),
+                    "escalationPenalty": float(round(escalation_penalty, 2)),
+                    "creditPenalty": float(round(float(credit_eval["penalty"]), 2)),
+                    "hasCreditLimit": has_limit,
+                    "creditCoverageRatio": float(round(coverage_ratio, 4)),
+                    "debtToLimitRatio": float(round(float(credit_eval["debtToLimitRatio"]), 4)),
+                    "creditLimit": cents_to_brl(int(credit_eval["creditLimitCents"])),
+                    "creditAvailable": cents_to_brl(int(credit_eval["creditAvailableCents"])),
+                    "scoreCap": score_cap,
+                    "flags": credit_eval["flags"],
+                },
             }
         )
 
@@ -469,7 +913,7 @@ def build_credit_limits_for_api(*, credit_rows: list[dict], receivable_rows: lis
 
         usage_ratio = safe_ratio(credit_used_cents, credit_limit_cents)
         exposure_to_available_ratio = safe_ratio(exposure_cents, credit_available_cents)
-        alert = classify_credit_alert(exposure_cents, credit_available_cents)
+        alert = classify_credit_alert(exposure_cents, credit_available_cents, credit_limit_cents)
 
         items.append(
             {
@@ -583,6 +1027,875 @@ def resolve_frontend_file(path: str) -> Path | None:
     return requested
 
 
+def extract_order_data_from_pdf(pdf_path: Path) -> dict:
+    try:
+        reader = PdfReader(str(pdf_path))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Falha ao ler PDF: {exc}") from exc
+
+    text = "\n".join((page.extract_text() or "") for page in reader.pages[:3])
+    normalized_text = re.sub(r"\s+", " ", text)
+
+    order_number = None
+    for pattern in [
+        r"PEDIDO\s+DE\s+VENDA\s*Nro\.?\s*:\s*([0-9A-Za-z\-_/]+)",
+        r"N[uú]mero\s+do\s+Pedido\s*:\s*([0-9A-Za-z\-_/]+)",
+        r"\bPedido\s*:\s*([0-9A-Za-z\-_/]+)",
+    ]:
+        match = re.search(pattern, normalized_text, flags=re.IGNORECASE)
+        if match:
+            order_number = match.group(1).strip()
+            break
+
+    customer_id_doc = None
+    for pattern in [
+        r"\bID\s*:\s*([0-9A-Za-z\-./]+)",
+        r"ID\s+Cliente\s*:\s*([0-9A-Za-z\-./]+)",
+    ]:
+        match = re.search(pattern, normalized_text, flags=re.IGNORECASE)
+        if match:
+            customer_id_doc = match.group(1).strip()
+            break
+
+    customer_name = None
+    for pattern in [
+        r"Cliente\s*:\s*([^:\n\r]+?)\s+ID\s*:",
+        r"Cliente\s*:\s*([^:\n\r]+)",
+    ]:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            customer_name = " ".join(match.group(1).split()).strip()
+            if customer_name:
+                break
+
+    order_value = None
+    for pattern in [
+        r"\bTotal\s*:\s*R?\$?\s*([0-9\.\,]+)",
+        r"Valor\s+Total\s*:\s*R?\$?\s*([0-9\.\,]+)",
+        r"Valor\s+do\s+Pedido\s*:\s*R?\$?\s*([0-9\.\,]+)",
+    ]:
+        match = re.search(pattern, normalized_text, flags=re.IGNORECASE)
+        if match:
+            order_value = parse_brl_number(match.group(1))
+            if order_value is not None:
+                break
+
+    return {
+        "orderNumber": order_number,
+        "customerIdDoc": customer_id_doc,
+        "customerName": customer_name,
+        "orderValue": order_value,
+    }
+
+
+def ensure_order_email_config(conn) -> dict:
+    row = conn.execute(
+        """
+        SELECT
+            id,
+            isabel_emails,
+            vitor_emails,
+            marcos_emails,
+            updated_by_user_id,
+            updated_at,
+            created_at
+        FROM order_email_config
+        WHERE id = 1
+        """
+    ).fetchone()
+    if row:
+        return dict(row)
+
+    default_isabel = normalize_email_targets(os.getenv("ISABEL_EMAIL", ""))
+    default_vitor = normalize_email_targets(os.getenv("VITOR_EMAIL", ""))
+    default_marcos = normalize_email_targets(os.getenv("MARCOS_EMAIL", ""))
+    conn.execute(
+        """
+        INSERT INTO order_email_config (
+            id,
+            isabel_emails,
+            vitor_emails,
+            marcos_emails,
+            updated_at
+        )
+        VALUES (1, ?, ?, ?, ?)
+        """,
+        (default_isabel, default_vitor, default_marcos, utc_now_iso()),
+    )
+    created = conn.execute(
+        """
+        SELECT
+            id,
+            isabel_emails,
+            vitor_emails,
+            marcos_emails,
+            updated_by_user_id,
+            updated_at,
+            created_at
+        FROM order_email_config
+        WHERE id = 1
+        """
+    ).fetchone()
+    return dict(created)
+
+
+def list_active_admin_email_targets(conn) -> list[str]:
+    admins = list_active_admin_users()
+    emails: list[str] = []
+    seen: set[str] = set()
+    for admin in admins:
+        for target in split_email_targets(admin.get("email")):
+            if target not in seen:
+                seen.add(target)
+                emails.append(target)
+    return emails
+
+
+def get_requester_email(conn, requester_user_id: int) -> str | None:
+    row = conn.execute(
+        "SELECT email FROM consultants WHERE id = ?",
+        (int(requester_user_id),),
+    ).fetchone()
+    if not row:
+        return None
+    emails = split_email_targets(row["email"])
+    return emails[0] if emails else None
+
+
+def record_order_event(
+    conn,
+    *,
+    order_request_id: int,
+    event_type: str,
+    actor_user_id: int | None,
+    actor_name: str | None,
+    from_status: str | None = None,
+    to_status: str | None = None,
+    message: str | None = None,
+    payload: dict | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO order_request_events (
+            order_request_id,
+            event_type,
+            actor_user_id,
+            actor_name,
+            from_status,
+            to_status,
+            message,
+            payload_json,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(order_request_id),
+            event_type,
+            actor_user_id,
+            actor_name,
+            from_status,
+            to_status,
+            message,
+            json.dumps(payload or {}, ensure_ascii=False),
+            utc_now_iso(),
+        ),
+    )
+
+
+def record_order_email_log(
+    conn,
+    *,
+    order_request_id: int,
+    email_kind: str,
+    recipient: str,
+    subject: str,
+    success: bool,
+    error_message: str | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO order_email_logs (
+            order_request_id,
+            email_kind,
+            recipient,
+            subject,
+            success,
+            error_message
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(order_request_id),
+            email_kind,
+            recipient,
+            subject,
+            1 if success else 0,
+            error_message,
+        ),
+    )
+
+
+def send_email_with_optional_pdf(
+    *,
+    recipient: str,
+    subject: str,
+    body: str,
+    pdf_path: Path | None,
+) -> tuple[bool, str | None]:
+    if not SMTP_HOST:
+        return False, "SMTP_HOST nao configurado."
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = SMTP_FROM
+    message["To"] = recipient
+    message.set_content(body)
+
+    if pdf_path is not None:
+        try:
+            content = pdf_path.read_bytes()
+        except FileNotFoundError:
+            return False, "PDF de anexo nao encontrado."
+        message.add_attachment(
+            content,
+            maintype="application",
+            subtype="pdf",
+            filename=pdf_path.name,
+        )
+
+    def _send_once(*, host: str, verify_tls: bool) -> None:
+        if SMTP_USE_TLS:
+            tls_context = ssl.create_default_context()
+            if not verify_tls:
+                tls_context.check_hostname = False
+                tls_context.verify_mode = ssl.CERT_NONE
+            with smtplib.SMTP(host, SMTP_PORT, timeout=30) as server:
+                server.starttls(context=tls_context)
+                if SMTP_USERNAME and SMTP_PASSWORD:
+                    server.login(SMTP_USERNAME, SMTP_PASSWORD)
+                server.send_message(message)
+        else:
+            ssl_context = ssl.create_default_context()
+            if not verify_tls:
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+            with smtplib.SMTP_SSL(host, SMTP_PORT, timeout=30, context=ssl_context) as server:
+                if SMTP_USERNAME and SMTP_PASSWORD:
+                    server.login(SMTP_USERNAME, SMTP_PASSWORD)
+                server.send_message(message)
+
+    host_candidates: list[str] = []
+    seen_hosts: set[str] = set()
+    for host in [SMTP_HOST, *SMTP_FALLBACK_HOSTS]:
+        normalized = host.strip().lower()
+        if not normalized or normalized in seen_hosts:
+            continue
+        seen_hosts.add(normalized)
+        host_candidates.append(host.strip())
+    if SMTP_HOST.strip().lower() == "smtp.office365.com" and "smtp-mail.outlook.com" not in seen_hosts:
+        host_candidates.append("smtp-mail.outlook.com")
+
+    errors: list[str] = []
+    for host in host_candidates:
+        for attempt in range(1, SMTP_MAX_RETRIES + 1):
+            try:
+                _send_once(host=host, verify_tls=SMTP_TLS_VERIFY)
+                return True, None
+            except Exception as exc:
+                error_text = str(exc)
+                cert_error = "CERTIFICATE_VERIFY_FAILED" in error_text.upper()
+                if cert_error and SMTP_TLS_VERIFY and SMTP_TLS_ALLOW_INSECURE_FALLBACK:
+                    try:
+                        _send_once(host=host, verify_tls=False)
+                        return True, None
+                    except Exception as fallback_exc:
+                        error_text = str(fallback_exc)
+
+                errors.append(f"{host} tentativa {attempt}/{SMTP_MAX_RETRIES}: {error_text}")
+                is_auth_error = isinstance(exc, smtplib.SMTPAuthenticationError) or "AUTHENTICATION" in error_text.upper()
+                if is_auth_error:
+                    break
+                if attempt < SMTP_MAX_RETRIES and SMTP_RETRY_BACKOFF_SECONDS > 0:
+                    time.sleep(SMTP_RETRY_BACKOFF_SECONDS * attempt)
+
+    if not errors:
+        return False, "Falha de envio sem detalhe."
+    return False, " | ".join(errors[-4:])
+
+
+def serialize_order_row(row: dict) -> dict:
+    extracted = json.loads(row.get("extracted_json") or "{}")
+    distribution = json.loads(row.get("distribution_json") or "{}")
+    return {
+        "id": int(row["id"]),
+        "externalId": row["external_id"],
+        "orderNumber": row["order_number"],
+        "consultantId": int(row["consultant_id"]),
+        "requestedByUserId": int(row["requested_by_user_id"]),
+        "customerCode": row["customer_code"],
+        "customerName": row["customer_name"],
+        "customerIdDoc": row["customer_id_doc"],
+        "orderValue": cents_to_brl(int(row["order_value_cents"])),
+        "openBalance": cents_to_brl(int(row["open_balance_cents"])),
+        "creditLimit": cents_to_brl(int(row["credit_limit_cents"])),
+        "overLimit": cents_to_brl(int(row["over_limit_cents"])),
+        "status": row["status"],
+        "statusReason": row["status_reason"],
+        "extracted": extracted,
+        "distribution": distribution,
+        "originalPdfPath": row["original_pdf_path"],
+        "signedPdfPath": row["signed_pdf_path"],
+        "analysisPdfPath": row.get("analysis_pdf_path"),
+        "packagePdfPath": row.get("package_pdf_path"),
+        "signatureMode": row["signature_mode"],
+        "signatureHash": row["signature_hash"],
+        "signedByUserId": row["signed_by_user_id"],
+        "signedByName": row.get("signed_by_name"),
+        "signedAt": row["signed_at"],
+        "returnedReason": row["returned_reason"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def resolve_credit_snapshot(
+    conn,
+    *,
+    consultant_id: int,
+    customer_code: str | None,
+    customer_name: str,
+    lookup_customer_name: str | None,
+    order_value_cents: int,
+) -> dict:
+    canonical_name = sanitize_company_name(customer_name)
+    customer_id: int | None = None
+    code = str(customer_code or "").strip()
+    normalized_target_name = normalize_customer_key(canonical_name)
+
+    candidate_names: list[str] = []
+    for raw in [lookup_customer_name, canonical_name]:
+        text = sanitize_company_name(raw)
+        if not text or is_generic_customer_lookup_name(text):
+            continue
+        if text not in candidate_names:
+            candidate_names.append(text)
+    if not candidate_names and canonical_name:
+        candidate_names.append(canonical_name)
+
+    candidate_keys = [
+        {
+            "name": name,
+            "exact": normalize_customer_key(name),
+            "loose": normalize_loose_customer_name_key(name),
+        }
+        for name in candidate_names
+    ]
+
+    def name_match_score(source_name: str | None) -> int:
+        source_text = sanitize_company_name(source_name)
+        if not source_text:
+            return 0
+        source_exact = normalize_customer_key(source_text)
+        source_loose = normalize_loose_customer_name_key(source_text)
+        source_tokens = set(source_loose.split())
+        best = 0
+        for candidate in candidate_keys:
+            candidate_exact = str(candidate["exact"])
+            candidate_loose = str(candidate["loose"])
+            if source_exact and candidate_exact and source_exact == candidate_exact:
+                best = max(best, 120)
+                continue
+            if source_loose and candidate_loose and source_loose == candidate_loose:
+                best = max(best, 110)
+                continue
+            if source_loose and candidate_loose and (
+                source_loose in candidate_loose or candidate_loose in source_loose
+            ):
+                if min(len(source_loose), len(candidate_loose)) >= 14:
+                    best = max(best, 95)
+                    continue
+            candidate_tokens = set(candidate_loose.split())
+            overlap = len(source_tokens & candidate_tokens)
+            if overlap >= 3:
+                best = max(best, min(90, 70 + overlap * 5))
+        return best
+
+    if code:
+        customer_row = conn.execute(
+            """
+            SELECT cust.id, cust.name
+            FROM consultant_customers cc
+            JOIN customers cust ON cust.id = cc.customer_id
+            WHERE cc.consultant_id = ? AND cust.customer_code = ?
+            ORDER BY cust.id DESC
+            LIMIT 1
+            """,
+            (int(consultant_id), code),
+        ).fetchone()
+        if customer_row:
+            customer_id = int(customer_row["id"])
+            canonical_name = str(customer_row["name"] or canonical_name)
+            normalized_target_name = normalize_customer_key(canonical_name)
+    elif canonical_name:
+        customer_by_name = conn.execute(
+            """
+            SELECT cust.id, cust.name
+            FROM consultant_customers cc
+            JOIN customers cust ON cust.id = cc.customer_id
+            WHERE cc.consultant_id = ?
+            ORDER BY cust.id DESC
+            """,
+            (int(consultant_id),),
+        ).fetchall()
+        best_row = None
+        best_score = 0
+        for row in customer_by_name:
+            score = name_match_score(str(row["name"] or ""))
+            if score > best_score:
+                best_score = score
+                best_row = row
+        if best_row is not None and best_score >= 90:
+            customer_id = int(best_row["id"])
+            canonical_name = sanitize_company_name(str(best_row["name"] or canonical_name))
+            normalized_target_name = normalize_customer_key(canonical_name)
+
+    exposure_cents = 0
+    if customer_id is not None:
+        balance_row = conn.execute(
+            """
+            SELECT COALESCE(SUM(balance_cents), 0) AS total_balance
+            FROM receivables
+            WHERE consultant_id = ? AND customer_id = ?
+            """,
+            (int(consultant_id), int(customer_id)),
+        ).fetchone()
+        exposure_cents = int(balance_row["total_balance"] or 0)
+    elif code:
+        balance_row = conn.execute(
+            """
+            SELECT COALESCE(SUM(r.balance_cents), 0) AS total_balance
+            FROM receivables r
+            JOIN customers cust ON cust.id = r.customer_id
+            WHERE r.consultant_id = ? AND cust.customer_code = ?
+            """,
+            (int(consultant_id), code),
+        ).fetchone()
+        exposure_cents = int(balance_row["total_balance"] or 0)
+    elif normalized_target_name:
+        receivable_rows = conn.execute(
+            """
+            SELECT cust.name, r.balance_cents
+            FROM receivables r
+            JOIN customers cust ON cust.id = r.customer_id
+            WHERE r.consultant_id = ?
+            """,
+            (int(consultant_id),),
+        ).fetchall()
+        best_name_exact: str | None = None
+        best_score = 0
+        for row in receivable_rows:
+            score = name_match_score(str(row["name"] or ""))
+            if score > best_score:
+                best_score = score
+                best_name_exact = normalize_customer_key(str(row["name"] or ""))
+        if best_name_exact and best_score >= 90:
+            for row in receivable_rows:
+                if normalize_customer_key(str(row["name"] or "")) == best_name_exact:
+                    exposure_cents += int(row["balance_cents"] or 0)
+
+    credit_rows = conn.execute(
+        """
+        SELECT customer_name, credit_limit_cents
+        FROM credit_limits
+        WHERE consultant_id = ?
+        ORDER BY id DESC
+        """,
+        (int(consultant_id),),
+    ).fetchall()
+    credit_limit_cents = 0
+    best_credit_score = 0
+    for row in credit_rows:
+        score = name_match_score(str(row["customer_name"] or ""))
+        if score > best_credit_score:
+            best_credit_score = score
+            credit_limit_cents = int(row["credit_limit_cents"] or 0)
+            if score >= 110:
+                break
+    if best_credit_score < 90:
+        credit_limit_cents = 0
+
+    projected = order_value_cents + exposure_cents
+    over_limit_cents = max(0, projected - credit_limit_cents)
+    approved = credit_limit_cents > 0
+    if not approved:
+        reason = "Cliente sem limite cadastrado. Converse com Isabel para revisao."
+    elif projected > credit_limit_cents:
+        reason = (
+            "Cliente com limite cadastrado. Exposicao estimada acima do limite, "
+            "encaminhado para aprovacao manual da Isabel."
+        )
+    else:
+        reason = "Cliente com limite cadastrado. Encaminhado para aprovacao da Isabel."
+
+    return {
+        "canonicalName": canonical_name,
+        "openBalanceCents": exposure_cents,
+        "creditLimitCents": credit_limit_cents,
+        "overLimitCents": over_limit_cents,
+        "approved": approved,
+        "reason": reason,
+    }
+
+def fetch_order_customer_receivables(
+    conn,
+    *,
+    consultant_id: int,
+    customer_code: str | None,
+    customer_name: str,
+) -> tuple[list[dict], str]:
+    rows = conn.execute(
+        """
+        SELECT
+            r.document_ref,
+            r.installment,
+            r.due_date,
+            r.status,
+            r.balance_cents,
+            cust.customer_code,
+            cust.name AS customer_name,
+            cons.name AS consultant_name
+        FROM receivables r
+        JOIN customers cust ON cust.id = r.customer_id
+        JOIN consultants cons ON cons.id = r.consultant_id
+        WHERE r.consultant_id = ?
+        ORDER BY r.balance_cents DESC, r.due_date ASC
+        """,
+        (int(consultant_id),),
+    ).fetchall()
+
+    selected_code = str(customer_code or "").strip()
+    selected_name_key = normalize_customer_key(customer_name)
+    matched: list[dict] = []
+    for row in rows:
+        row_code = str(row["customer_code"] or "").strip()
+        row_name_key = normalize_customer_key(str(row["customer_name"] or ""))
+        if selected_code:
+            if row_code and row_code == selected_code:
+                matched.append(dict(row))
+        elif selected_name_key and row_name_key == selected_name_key:
+            matched.append(dict(row))
+
+    if not matched and selected_code and selected_name_key:
+        for row in rows:
+            row_name_key = normalize_customer_key(str(row["customer_name"] or ""))
+            if row_name_key == selected_name_key:
+                matched.append(dict(row))
+
+    consultant_name = ""
+    if rows:
+        consultant_name = str(rows[0]["consultant_name"] or "")
+    if not consultant_name:
+        row = conn.execute(
+            "SELECT name FROM consultants WHERE id = ?",
+            (int(consultant_id),),
+        ).fetchone()
+        consultant_name = str(row["name"] or "") if row else ""
+
+    return matched, consultant_name or f"Consultor #{consultant_id}"
+
+
+def generate_client_analysis_attachment_pdf(
+    *,
+    external_id: str,
+    consultant_name: str,
+    customer_name: str,
+    customer_code: str | None,
+    order_number: str,
+    order_value_cents: int,
+    credit_snapshot: dict,
+    receivable_rows: list[dict],
+) -> Path:
+    today = date.today()
+    total_cents = 0
+    overdue_cents = 0
+    due7_cents = 0
+    due30_cents = 0
+    parsed_rows: list[dict] = []
+
+    for row in receivable_rows:
+        balance_cents = int(row.get("balance_cents") or 0)
+        total_cents += balance_cents
+        due_date = parse_iso_date(row.get("due_date"))
+        day_diff = (due_date - today).days if due_date else None
+        status = str(row.get("status") or "")
+        is_overdue = "vencido" in status.lower() or (day_diff is not None and day_diff < 0)
+        if is_overdue:
+            overdue_cents += balance_cents
+        if day_diff is not None and 0 <= day_diff <= 7:
+            due7_cents += balance_cents
+        if day_diff is not None and 0 <= day_diff <= 30:
+            due30_cents += balance_cents
+        parsed_rows.append(
+            {
+                "documentRef": str(row.get("document_ref") or ""),
+                "installment": str(row.get("installment") or ""),
+                "dueDate": str(row.get("due_date") or ""),
+                "dayDiff": day_diff,
+                "balanceCents": balance_cents,
+            }
+        )
+
+    top_titles = sorted(parsed_rows, key=lambda item: item["balanceCents"], reverse=True)[:10]
+
+    guidance = "Cliente apto para continuidade operacional com monitoramento padrão."
+    if int(credit_snapshot.get("creditLimitCents") or 0) <= 0:
+        guidance = "Cliente sem limite cadastrado. Requer tratativa antes da aprovação definitiva."
+    elif int(credit_snapshot.get("overLimitCents") or 0) > 0:
+        guidance = "Exposição estimada acima do limite. Aprovação manual recomendada."
+    elif overdue_cents > 0:
+        guidance = "Cliente com atraso em aberto. Reforçar acompanhamento preventivo."
+
+    output_path = ORDER_ANALYSIS_DIR / f"{external_id}-analise-cliente.pdf"
+    page_width = 595.27  # A4 portrait width in points
+    page_height = 841.89  # A4 portrait height in points
+    drawing = canvas.Canvas(str(output_path), pagesize=(page_width, page_height))
+
+    y = page_height - 42
+    drawing.setFont("Helvetica-Bold", 14)
+    drawing.drawString(32, y, "Analise Cliente - Relatorio para Encaminhamento")
+
+    drawing.setFont("Helvetica", 9)
+    y -= 16
+    drawing.drawString(32, y, f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    y -= 14
+    drawing.drawString(32, y, f"Pedido: {order_number}")
+    y -= 14
+    drawing.drawString(
+        32,
+        y,
+        f"Cliente: {customer_name}  |  Codigo: {str(customer_code or '-').strip() or '-'}",
+    )
+    y -= 14
+    drawing.drawString(32, y, f"Consultor: {consultant_name}")
+    y -= 14
+    drawing.drawString(32, y, f"Valor do pedido: {format_brl_from_cents(order_value_cents)}")
+
+    y -= 28
+    drawing.setFont("Helvetica-Bold", 11)
+    drawing.drawString(32, y, "Resumo financeiro")
+    y -= 14
+    drawing.setFont("Helvetica", 9)
+    drawing.drawString(32, y, f"Saldo total em aberto: {format_brl_from_cents(total_cents)}")
+    y -= 13
+    drawing.drawString(32, y, f"Saldo vencido: {format_brl_from_cents(overdue_cents)}")
+    y -= 13
+    drawing.drawString(32, y, f"Vence em 7 dias: {format_brl_from_cents(due7_cents)}")
+    y -= 13
+    drawing.drawString(32, y, f"Vence em 30 dias: {format_brl_from_cents(due30_cents)}")
+    y -= 13
+    drawing.drawString(
+        32,
+        y,
+        f"Limite de credito: {format_brl_from_cents(int(credit_snapshot.get('creditLimitCents') or 0))}",
+    )
+    y -= 13
+    drawing.drawString(
+        32,
+        y,
+        f"Excesso projetado: {format_brl_from_cents(int(credit_snapshot.get('overLimitCents') or 0))}",
+    )
+
+    y -= 22
+    drawing.setFont("Helvetica-Bold", 10)
+    drawing.drawString(32, y, "Leitura operacional")
+    y -= 13
+    drawing.setFont("Helvetica", 9)
+    drawing.drawString(32, y, guidance)
+
+    y -= 22
+    drawing.setFont("Helvetica-Bold", 10)
+    drawing.drawString(32, y, "Top titulos por exposicao")
+    y -= 14
+    drawing.setFont("Helvetica-Bold", 8)
+    drawing.drawString(32, y, "Documento")
+    drawing.drawString(172, y, "Parcela")
+    drawing.drawString(248, y, "Vencimento")
+    drawing.drawString(334, y, "Prazo")
+    drawing.drawString(390, y, "Valor")
+    drawing.line(32, y - 3, page_width - 32, y - 3)
+    y -= 14
+    drawing.setFont("Helvetica", 8)
+    for item in top_titles:
+        if y < 70:
+            break
+        due_label = "-"
+        if item["dayDiff"] is not None:
+            if item["dayDiff"] < 0:
+                due_label = f"{abs(int(item['dayDiff']))}d atraso"
+            elif item["dayDiff"] == 0:
+                due_label = "vence hoje"
+            else:
+                due_label = f"vence em {int(item['dayDiff'])}d"
+        drawing.drawString(32, y, item["documentRef"][:24] or "-")
+        drawing.drawString(172, y, item["installment"][:12] or "-")
+        drawing.drawString(248, y, item["dueDate"] or "-")
+        drawing.drawString(334, y, due_label)
+        drawing.drawRightString(page_width - 36, y, format_brl_from_cents(item["balanceCents"]))
+        y -= 12
+
+    drawing.setFont("Helvetica", 7.5)
+    drawing.drawString(
+        32,
+        32,
+        "Anexo gerado automaticamente para apoiar a decisão da aprovação sem interromper o fluxo operacional.",
+    )
+    drawing.save()
+    return output_path
+
+
+def build_order_package_pdf(
+    *,
+    external_id: str,
+    order_pdf_path: Path,
+    analysis_pdf_path: Path | None,
+) -> Path:
+    if analysis_pdf_path is None or not analysis_pdf_path.exists() or not order_pdf_path.exists():
+        return order_pdf_path
+
+    package_path = ORDER_PACKAGE_DIR / f"{external_id}-pacote.pdf"
+    writer = PdfWriter()
+    for source_path in [order_pdf_path, analysis_pdf_path]:
+        reader = PdfReader(str(source_path))
+        for page in reader.pages:
+            writer.add_page(page)
+
+    if len(writer.pages) == 0:
+        return order_pdf_path
+
+    with package_path.open("wb") as stream:
+        writer.write(stream)
+
+    if package_path.stat().st_size > ORDER_MAX_PDF_BYTES:
+        package_path.unlink(missing_ok=True)
+        return order_pdf_path
+
+    return package_path
+
+
+def build_signature_overlay(
+    *,
+    page_width: float,
+    page_height: float,
+    order_number: str,
+    customer_name: str,
+    order_value_cents: int,
+    signed_by_name: str,
+    signed_at_iso: str,
+    signature_mode: str,
+    signature_hash: str,
+    signature_canvas_bytes: bytes | None,
+):
+    packet = BytesIO()
+    drawing = canvas.Canvas(packet, pagesize=(page_width, page_height))
+
+    margin = 28
+    box_height = 138
+    y = 22
+    drawing.setStrokeColorRGB(0.16, 0.34, 0.31)
+    drawing.setFillColorRGB(0.94, 0.98, 0.95)
+    drawing.roundRect(margin, y, page_width - (margin * 2), box_height, 10, stroke=1, fill=1)
+
+    drawing.setFillColorRGB(0.08, 0.30, 0.20)
+    drawing.setFont("Helvetica-Bold", 11)
+    drawing.drawString(margin + 12, y + 114, "APROVADO DIGITALMENTE")
+
+    drawing.setFillColorRGB(0.15, 0.15, 0.15)
+    drawing.setFont("Helvetica", 9)
+    drawing.drawString(margin + 12, y + 98, f"Pedido: {order_number}")
+    drawing.drawString(margin + 12, y + 84, f"Cliente: {customer_name}")
+    drawing.drawString(margin + 12, y + 70, f"Valor: R$ {cents_to_brl(order_value_cents):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+    drawing.drawString(margin + 12, y + 56, f"Assinado por: {signed_by_name}")
+    drawing.drawString(margin + 12, y + 42, f"Data/Hora UTC: {signed_at_iso}")
+    drawing.drawString(margin + 12, y + 28, f"Modo: {signature_mode.upper()}")
+    drawing.drawString(margin + 12, y + 14, f"Hash: {signature_hash[:36]}...")
+
+    if signature_mode == "canvas" and signature_canvas_bytes:
+        image = ImageReader(BytesIO(signature_canvas_bytes))
+        drawing.drawImage(
+            image,
+            page_width - 218,
+            y + 18,
+            width=168,
+            height=64,
+            preserveAspectRatio=True,
+            mask="auto",
+        )
+
+    drawing.save()
+    packet.seek(0)
+    return PdfReader(packet).pages[0]
+
+
+def generate_signed_order_pdf(
+    *,
+    original_pdf_path: Path,
+    signed_pdf_path: Path,
+    signature_image_path: Path | None,
+    order_number: str,
+    customer_name: str,
+    order_value_cents: int,
+    signed_by_name: str,
+    signature_mode: str,
+) -> tuple[str, int]:
+    if not original_pdf_path.exists():
+        raise HTTPException(status_code=404, detail="PDF original do pedido nao encontrado.")
+
+    reader = PdfReader(str(original_pdf_path))
+    if not reader.pages:
+        raise HTTPException(status_code=400, detail="PDF do pedido sem paginas.")
+
+    original_bytes = original_pdf_path.read_bytes()
+    signed_at_iso = utc_now_iso()
+    signature_hash = hash_order_signature(
+        pdf_bytes=original_bytes,
+        order_number=order_number,
+        signed_by=signed_by_name,
+        signed_at_iso=signed_at_iso,
+    )
+
+    signature_canvas_bytes = signature_image_path.read_bytes() if signature_image_path else None
+
+    writer = PdfWriter()
+    for index, page in enumerate(reader.pages):
+        if index == len(reader.pages) - 1:
+            overlay = build_signature_overlay(
+                page_width=float(page.mediabox.width),
+                page_height=float(page.mediabox.height),
+                order_number=order_number,
+                customer_name=customer_name,
+                order_value_cents=order_value_cents,
+                signed_by_name=signed_by_name,
+                signed_at_iso=signed_at_iso,
+                signature_mode=signature_mode,
+                signature_hash=signature_hash,
+                signature_canvas_bytes=signature_canvas_bytes,
+            )
+            page.merge_page(overlay)
+        writer.add_page(page)
+
+    signed_pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    with signed_pdf_path.open("wb") as stream:
+        writer.write(stream)
+
+    size = signed_pdf_path.stat().st_size
+    if size > ORDER_MAX_PDF_BYTES:
+        signed_pdf_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="PDF final excede 10MB.")
+
+    return signature_hash, size
+
+
 app = FastAPI(title="DronePro API", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
@@ -602,8 +1915,133 @@ def ensure_bootstrap_admin() -> None:
     ensure_admin_user(password=DEFAULT_ADMIN_PASSWORD, username="adm")
 
 
+def ensure_bootstrap_named_admin(
+    *,
+    name: str,
+    username: str,
+    password: str,
+    email_env_key: str,
+    is_admin: bool = True,
+    legacy_usernames: list[str] | None = None,
+) -> None:
+    username_clean = str(username).strip().lower()
+    if not username_clean:
+        return
+
+    alias_keys = [username_clean]
+    for legacy in legacy_usernames or []:
+        normalized_legacy = str(legacy or "").strip().lower()
+        if normalized_legacy and normalized_legacy not in alias_keys:
+            alias_keys.append(normalized_legacy)
+
+    raw_email = str(os.getenv(email_env_key, "")).strip().lower()
+    bootstrap_email = raw_email if EMAIL_REGEX.match(raw_email) else None
+
+    with get_connection() as conn:
+        placeholders = ", ".join("?" for _ in alias_keys)
+        row = conn.execute(
+            f"""
+            SELECT id
+            FROM consultants
+            WHERE lower(username) IN ({placeholders})
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            tuple(alias_keys),
+        ).fetchone()
+        password_hash = hash_password(password)
+        if row:
+            if bootstrap_email:
+                conn.execute(
+                    """
+                    UPDATE consultants
+                    SET
+                        name = ?,
+                        username = ?,
+                        password_hash = ?,
+                        is_admin = ?,
+                        is_active = 1,
+                        email = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        name,
+                        username_clean,
+                        password_hash,
+                        1 if is_admin else 0,
+                        bootstrap_email,
+                        int(row["id"]),
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE consultants
+                    SET
+                        name = ?,
+                        username = ?,
+                        password_hash = ?,
+                        is_admin = ?,
+                        is_active = 1
+                    WHERE id = ?
+                    """,
+                    (
+                        name,
+                        username_clean,
+                        password_hash,
+                        1 if is_admin else 0,
+                        int(row["id"]),
+                    ),
+                )
+        else:
+            conn.execute(
+                """
+                INSERT INTO consultants (name, username, password_hash, is_admin, email, is_active)
+                VALUES (?, ?, ?, ?, ?, 1)
+                """,
+                (
+                    name,
+                    username_clean,
+                    password_hash,
+                    1 if is_admin else 0,
+                    bootstrap_email,
+                ),
+            )
+        conn.commit()
+
+
+def ensure_bootstrap_isabel_and_marcos_admins() -> None:
+    ensure_bootstrap_named_admin(
+        name="Isabel",
+        username=ISABEL_USERNAME,
+        password=DEFAULT_ISABEL_PASSWORD,
+        email_env_key="ISABEL_EMAIL",
+        legacy_usernames=["isabel"],
+    )
+    ensure_bootstrap_named_admin(
+        name="Marcos",
+        username=MARCOS_USERNAME,
+        password=DEFAULT_MARCOS_PASSWORD,
+        email_env_key="MARCOS_EMAIL",
+        legacy_usernames=["marcos"],
+    )
+
+
+def ensure_bootstrap_vitor_financeiro_user() -> None:
+    ensure_bootstrap_named_admin(
+        name="Vitor Financeiro",
+        username=VITOR_FINANCIAL_USERNAME,
+        password=DEFAULT_VITOR_FINANCIAL_PASSWORD,
+        email_env_key="VITOR_FINANCEIRO_EMAIL",
+        is_admin=False,
+        legacy_usernames=["vitor_financeiro", "vitor-financeiro"],
+    )
+
+
 init_db()
 ensure_bootstrap_admin()
+ensure_bootstrap_isabel_and_marcos_admins()
+ensure_bootstrap_vitor_financeiro_user()
 
 
 @app.get("/api/health")
@@ -624,6 +2062,7 @@ def login(payload: dict) -> dict:
             name=user.name,
             username="adm",
             is_admin=True,
+            email=user.email,
         )
     return build_auth_session(user)
 
@@ -632,13 +2071,14 @@ def login(payload: dict) -> dict:
 def consultants(authorization: str | None = Header(default=None)) -> list[dict]:
     user = get_current_user_from_header(authorization)
     available = list_consultants()
-    if user.is_admin:
+    if user.is_admin or is_operational_username(user.username):
         return [
             {
                 "id": int(item["id"]),
                 "name": item["name"],
                 "username": item["username"],
                 "role": "admin" if item["is_admin"] else "consultor",
+                "email": item.get("email"),
             }
             for item in available
             if not item["is_admin"]
@@ -650,6 +2090,7 @@ def consultants(authorization: str | None = Header(default=None)) -> list[dict]:
             "name": user.name,
             "username": user.username,
             "role": "consultor",
+            "email": user.email,
         }
     ]
 
@@ -682,8 +2123,9 @@ def dashboard_client_health(
 ) -> list[dict]:
     user = get_current_user_from_header(authorization)
     rows = fetch_receivables_for_user(user=user, selected_consultant_id=consultantId)
+    credit_rows = fetch_credit_limits_for_user(user=user, selected_consultant_id=consultantId)
     df = rows_to_dataframe(rows)
-    return build_client_health_for_api(df)
+    return build_client_health_for_api(df, credit_rows=credit_rows)
 
 
 @app.get("/api/dashboard/credit-limits")
@@ -703,8 +2145,7 @@ def admin_ingestion_history(
     authorization: str | None = Header(default=None),
 ) -> dict:
     user = get_current_user_from_header(authorization)
-    if not user.is_admin or user.username.lower() != "adm":
-        raise HTTPException(status_code=403, detail="Somente o usuario adm pode consultar o historico.")
+    ensure_operational_user(user)
     return {"items": list_ingestion_batches(limit=limit)}
 
 
@@ -716,14 +2157,13 @@ def admin_import(
     allowSkippedLines: int = Form(default=0),
     allowSkippedCreditRows: int = Form(default=10),
     inputProfile: str = Form(default="auto"),
-    actorUsername: str = Form(default="adm"),
+    actorUsername: str | None = Form(default=None),
     pdf: UploadFile | None = File(default=None),
     excel: UploadFile | None = File(default=None),
     authorization: str | None = Header(default=None),
 ) -> dict:
     user = get_current_user_from_header(authorization)
-    if not user.is_admin or user.username.lower() != "adm":
-        raise HTTPException(status_code=403, detail="Somente o usuario adm pode importar.")
+    ensure_operational_user(user)
     if not pdf and not excel:
         raise HTTPException(status_code=400, detail="Selecione ao menos um arquivo.")
 
@@ -772,6 +2212,7 @@ def admin_import(
         f"Protocolo: {operation_id}",
         f"Lote interno: {batch_id}",
         f"Processado em: {processed_at}",
+        f"Usuario autenticado: {user.username}",
         f"Modo: {op_mode}",
         f"Perfil de entrada: {input_profile}",
         f"Append mode: {'sim' if append_mode else 'nao'}",
@@ -810,8 +2251,11 @@ def admin_import(
     credit_report = None
     excel_receivables_report = None
 
-    if actorUsername.strip().lower() != "adm":
-        warnings.append("Actor informado diferente de adm; autenticacao em token foi usada.")
+    actor_value = " ".join(str(actorUsername or "").split())
+    if actor_value and actor_value.lower() != user.username.lower():
+        audit_log.append(
+            f"[AUDITORIA] actorUsername recebido ({actor_value}) ignorado; usuario autenticado usado ({user.username})."
+        )
     audit_log.append(
         f"Arquivos recebidos: PDF={'sim' if pdf else 'nao'} | Excel={'sim' if excel else 'nao'}"
     )
@@ -910,7 +2354,12 @@ def admin_import(
         try:
             customer_hints = fetch_customer_import_hints()
             document_hints = fetch_document_consultant_hints()
-            credit_report = parse_credit_excel(temp_excel, customer_hints=customer_hints)
+            fallback_consultant_name = DEFAULT_REPORT_CONSULTANT
+            credit_report = parse_credit_excel(
+                temp_excel,
+                customer_hints=customer_hints,
+                default_consultant_name=fallback_consultant_name,
+            )
             augmented_hints = {
                 key: {
                     "consultantName": value.get("consultantName"),
@@ -931,11 +2380,26 @@ def admin_import(
                 temp_excel,
                 customer_hints=augmented_hints,
                 document_hints=document_hints,
-                default_consultant_name=(
-                    DEFAULT_REPORT_CONSULTANT if input_profile == "report_v1" else None
-                ),
+                default_consultant_name=fallback_consultant_name,
             )
+            report_layout_validation = None
             if input_profile == "report_v1":
+                report_layout_validation = validate_report_v1_workbook_layout(
+                    credit_report.workbook_sheets
+                )
+                warnings.extend(
+                    [
+                        f"[EXCEL:REPORT_LAYOUT:{item.code}] {item.message}"
+                        for item in report_layout_validation.warnings
+                    ]
+                )
+                warnings.extend(
+                    [
+                        f"[EXCEL:REPORT_LAYOUT:{item.code}] {item.message}"
+                        for item in report_layout_validation.errors
+                    ]
+                )
+
                 expected_columns = {"dueDate", "documentRef", "customerName", "installmentValue"}
                 profile_ok = any(
                     (
@@ -945,12 +2409,9 @@ def admin_import(
                     for summary in excel_receivables_report.sheet_summaries
                 )
                 if not profile_ok:
-                    has_errors = True
-                    validation_errors_count += 1
                     warnings.append(
                         "[EXCEL:REPORT_PROFILE_MISMATCH] "
-                        "Formato invalido para perfil report_v1. Esperadas colunas: "
-                        "vencimento, NF, Cliente e valor parcela."
+                        "Formato fora do perfil report_v1. O sistema aplicou leitura flexivel automatica."
                     )
             credit_validation = validate_credit_parse_report(
                 credit_report,
@@ -1096,13 +2557,23 @@ def admin_import(
                     ),
                     "summaryLines": [
                         f"Perfil de entrada: {input_profile}",
+                        f"Fallback de consultor automatico: {DEFAULT_REPORT_CONSULTANT}",
                         (
-                            f"Fallback de consultor: {DEFAULT_REPORT_CONSULTANT}"
+                            "Abas report_v1 detectadas: "
+                            + ", ".join(credit_report.workbook_sheets)
                             if input_profile == "report_v1"
-                            else "Fallback de consultor: desativado"
+                            else "Abas detectadas: " + ", ".join(credit_report.workbook_sheets)
                         ),
                         f"Aba referencia credito: {credit_stats['sheet_name']}",
                         f"Aba referencia titulos: {receivable_stats['sheet_name']}",
+                        (
+                            "Layout report_v1 -> "
+                            f"report={len(report_layout_validation.stats['report_sheets'])} | "
+                            f"credito={len(report_layout_validation.stats['credit_sheets'])} | "
+                            f"pedidos={len(report_layout_validation.stats['order_sheets'])}"
+                            if report_layout_validation
+                            else "Layout report_v1 -> nao aplicavel"
+                        ),
                         (
                             f"Credito -> linhas lidas {credit_stats['rows_scanned']} | "
                             f"candidatas {credit_stats['candidate_rows']} | "
@@ -1130,6 +2601,18 @@ def admin_import(
                     (
                         f"[EXCEL] erros credito={len(credit_validation.errors)} "
                         f"| erros titulos={len(receivable_validation.errors)}"
+                    ),
+                    (
+                        "[EXCEL] abas detectadas: "
+                        + ", ".join(credit_report.workbook_sheets)
+                    ),
+                    (
+                        "[EXCEL] layout report_v1 -> "
+                        f"report={len(report_layout_validation.stats['report_sheets'])} | "
+                        f"credito={len(report_layout_validation.stats['credit_sheets'])} | "
+                        f"pedidos={len(report_layout_validation.stats['order_sheets'])}"
+                        if report_layout_validation
+                        else "[EXCEL] layout report_v1 -> nao aplicavel"
                     ),
                 ]
             )
@@ -1342,23 +2825,23 @@ def admin_import(
 
 @app.post("/api/admin/clear-data")
 def admin_clear_data(
-    actorUsername: str = Form(default="adm"),
+    actorUsername: str | None = Form(default=None),
     removeConsultants: str = Form(default="true"),
     authorization: str | None = Header(default=None),
 ) -> dict:
     user = get_current_user_from_header(authorization)
-    if not user.is_admin or user.username.lower() != "adm":
-        raise HTTPException(status_code=403, detail="Somente o usuario adm pode limpar a base.")
+    ensure_operational_user(user)
 
-    if str(actorUsername).strip().lower() != "adm":
-        raise HTTPException(status_code=400, detail="Actor invalido para limpeza da base.")
+    actor_value = " ".join(str(actorUsername or "").split())
+    if actor_value and actor_value.lower() != user.username.lower():
+        raise HTTPException(status_code=400, detail="Actor informado nao corresponde ao usuario autenticado.")
 
     operation_id = f"CLR-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
     processed_at = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     removed = reset_operational_data(remove_non_admin_consultants=to_bool(removeConsultants))
 
     for token, current_user in list(TOKEN_STORE.items()):
-        if not current_user.is_admin:
+        if not is_operational_username(current_user.username):
             TOKEN_STORE.pop(token, None)
 
     return {
@@ -1374,7 +2857,7 @@ def admin_clear_data(
 def admin_import_report_v1(
     excel: UploadFile | None = File(default=None),
     replaceBase: str = Form(default="false"),
-    actorUsername: str = Form(default="adm"),
+    actorUsername: str | None = Form(default=None),
     authorization: str | None = Header(default=None),
 ) -> dict:
     if not excel:
@@ -1388,12 +2871,1393 @@ def admin_import_report_v1(
         appendMode=append_mode,
         allowSkippedLines=0,
         allowSkippedCreditRows=0,
-        inputProfile="report_v1",
+        inputProfile="auto",
         actorUsername=actorUsername,
         pdf=None,
         excel=excel,
         authorization=authorization,
     )
+
+
+def fetch_order_row_or_404(conn, order_id: int) -> dict:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM order_requests
+        WHERE id = ?
+        """,
+        (int(order_id),),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Pedido de aprovacao nao encontrado.")
+    return dict(row)
+
+
+def ensure_order_access(user: AuthenticatedUser, order_row: dict) -> None:
+    if is_operational_username(user.username):
+        return
+    if is_financial_username(user.username):
+        if order_row["status"] in {ORDER_STATUS_SIGNED_DISTRIBUTING, ORDER_STATUS_DONE, ORDER_STATUS_BILLED}:
+            return
+        raise HTTPException(status_code=403, detail="Perfil financeiro acessa apenas comprovantes finalizados.")
+    if int(order_row["requested_by_user_id"]) == int(user.id):
+        return
+    if int(order_row["consultant_id"]) == int(user.id):
+        return
+    raise HTTPException(status_code=403, detail="Sem permissao para acessar este pedido.")
+
+
+@app.post("/api/pedidos/extrair")
+async def pedidos_extrair(
+    pdf: UploadFile = File(...),
+    authorization: str | None = Header(default=None),
+) -> dict:
+    _ = get_current_user_from_header(authorization)
+    name = (pdf.filename or "").lower().strip()
+    if not name.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Envie um arquivo PDF.")
+
+    raw = await pdf.read()
+    if len(raw) > ORDER_MAX_PDF_BYTES:
+        raise HTTPException(status_code=400, detail="PDF acima de 10MB.")
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+        temp_file.write(raw)
+        temp_path = Path(temp_file.name)
+
+    try:
+        extracted = extract_order_data_from_pdf(temp_path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+    return {
+        "extracted": extracted,
+        "warnings": [
+            "Alguns campos podem exigir ajuste manual antes do encaminhamento."
+        ],
+    }
+
+
+@app.post("/api/pedidos/encaminhar")
+async def pedidos_encaminhar(
+    pdf: UploadFile = File(...),
+    consultantId: int = Form(...),
+    customerCode: str | None = Form(default=None),
+    customerName: str = Form(...),
+    lookupCustomerName: str | None = Form(default=None),
+    orderValue: float = Form(...),
+    orderNumber: str | None = Form(default=None),
+    customerIdDoc: str | None = Form(default=None),
+    routeByEmail: str | bool = Form(default=False),
+    recipientEmails: str | None = Form(default=None),
+    attachClientAnalysis: str | bool = Form(default=True),
+    authorization: str | None = Header(default=None),
+) -> dict:
+    user = get_current_user_from_header(authorization)
+    consultant_id = int(consultantId)
+    ensure_operational_user(user)
+    if orderValue <= 0:
+        raise HTTPException(status_code=400, detail="Valor do pedido deve ser maior que zero.")
+
+    consultant = get_consultant_by_id(consultant_id)
+    if not consultant or not consultant.get("is_active"):
+        raise HTTPException(status_code=400, detail="Consultor informado nao esta ativo.")
+
+    filename = (pdf.filename or "").lower().strip()
+    if not filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Envie um arquivo PDF.")
+
+    raw_pdf = await pdf.read()
+    if len(raw_pdf) > ORDER_MAX_PDF_BYTES:
+        raise HTTPException(status_code=400, detail="PDF acima de 10MB.")
+
+    external_id = build_order_external_id()
+    original_pdf_path = ORDER_ORIGINAL_DIR / f"{external_id}.pdf"
+    original_pdf_path.write_bytes(raw_pdf)
+
+    extracted = extract_order_data_from_pdf(original_pdf_path)
+    resolved_order_number = str(orderNumber or extracted.get("orderNumber") or external_id).strip()
+    resolved_customer_name = str(customerName or extracted.get("customerName") or "").strip()
+    if not resolved_customer_name:
+        raise HTTPException(status_code=400, detail="Nome do cliente obrigatorio.")
+
+    order_value_cents = brl_to_cents(orderValue)
+    attach_client_analysis = to_bool(attachClientAnalysis)
+    route_by_email = to_bool(routeByEmail)
+    manual_recipients = split_email_targets(recipientEmails if route_by_email else None)
+    if route_by_email and not manual_recipients:
+        raise HTTPException(
+            status_code=400,
+            detail="Informe ao menos um e-mail valido para encaminhamento manual.",
+        )
+    warnings: list[str] = []
+    with get_connection() as conn:
+        config = ensure_order_email_config(conn)
+        credit_snapshot = resolve_credit_snapshot(
+            conn,
+            consultant_id=consultant_id,
+            customer_code=customerCode,
+            customer_name=resolved_customer_name,
+            lookup_customer_name=lookupCustomerName,
+            order_value_cents=order_value_cents,
+        )
+        canonical_resolved_name = str(credit_snapshot.get("canonicalName") or "").strip()
+        if canonical_resolved_name:
+            resolved_customer_name = canonical_resolved_name
+        status = ORDER_STATUS_AWAITING_SIGNATURE if credit_snapshot["approved"] else ORDER_STATUS_NEGATIVE
+        status_reason = credit_snapshot["reason"]
+
+        analysis_pdf_path: Path | None = None
+        if attach_client_analysis:
+            try:
+                receivable_rows, consultant_name = fetch_order_customer_receivables(
+                    conn,
+                    consultant_id=consultant_id,
+                    customer_code=customerCode,
+                    customer_name=resolved_customer_name,
+                )
+                analysis_pdf_path = generate_client_analysis_attachment_pdf(
+                    external_id=external_id,
+                    consultant_name=consultant_name,
+                    customer_name=resolved_customer_name,
+                    customer_code=str(customerCode or "").strip() or None,
+                    order_number=resolved_order_number,
+                    order_value_cents=order_value_cents,
+                    credit_snapshot=credit_snapshot,
+                    receivable_rows=receivable_rows,
+                )
+            except Exception as exc:
+                warnings.append(f"Nao foi possivel gerar anexo de analise cliente: {exc}")
+
+        attachment_pdf_path = original_pdf_path
+        if analysis_pdf_path is not None:
+            try:
+                attachment_pdf_path = build_order_package_pdf(
+                    external_id=external_id,
+                    order_pdf_path=original_pdf_path,
+                    analysis_pdf_path=analysis_pdf_path,
+                )
+            except Exception as exc:
+                warnings.append(f"Nao foi possivel gerar pacote com anexo de analise: {exc}")
+        package_pdf_path: Path | None = (
+            attachment_pdf_path
+            if attachment_pdf_path != original_pdf_path and attachment_pdf_path.exists()
+            else None
+        )
+
+        cursor = conn.execute(
+            """
+            INSERT INTO order_requests (
+                external_id,
+                order_number,
+                consultant_id,
+                requested_by_user_id,
+                customer_code,
+                customer_name,
+                customer_id_doc,
+                order_value_cents,
+                open_balance_cents,
+                credit_limit_cents,
+                over_limit_cents,
+                status,
+                status_reason,
+                extracted_json,
+                original_pdf_path,
+                analysis_pdf_path,
+                package_pdf_path,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                external_id,
+                resolved_order_number,
+                consultant_id,
+                int(user.id),
+                str(customerCode or "").strip() or None,
+                resolved_customer_name,
+                str(customerIdDoc or extracted.get("customerIdDoc") or "").strip() or None,
+                order_value_cents,
+                int(credit_snapshot["openBalanceCents"]),
+                int(credit_snapshot["creditLimitCents"]),
+                int(credit_snapshot["overLimitCents"]),
+                status,
+                status_reason,
+                json.dumps(extracted, ensure_ascii=False),
+                original_pdf_path.as_posix(),
+                analysis_pdf_path.as_posix() if analysis_pdf_path else None,
+                package_pdf_path.as_posix() if package_pdf_path else None,
+                utc_now_iso(),
+            ),
+        )
+        order_id = int(cursor.lastrowid)
+        record_order_event(
+            conn,
+            order_request_id=order_id,
+            event_type="CREATED",
+            actor_user_id=int(user.id),
+            actor_name=user.name,
+            to_status=status,
+            message="Pedido encaminhado para analise de limite e roteamento.",
+            payload={
+                "consultantId": consultant_id,
+                "customerCode": str(customerCode or "").strip() or None,
+                "orderValue": cents_to_brl(order_value_cents),
+                "routeByEmail": route_by_email,
+                "manualRecipients": manual_recipients,
+                "attachClientAnalysis": attach_client_analysis,
+            },
+        )
+
+        notifications: list[dict] = []
+        if status == ORDER_STATUS_AWAITING_SIGNATURE:
+            recipients = split_email_targets(config["isabel_emails"])
+            routed_recipients: list[str] = []
+            for recipient in recipients:
+                subject = f"[Aprovacao pendente] Pedido {resolved_order_number} - {resolved_customer_name}"
+                body = (
+                    "Pedido encaminhado para assinatura digital.\n\n"
+                    f"Pedido: {resolved_order_number}\n"
+                    f"Cliente: {resolved_customer_name}\n"
+                    f"Valor: R$ {cents_to_brl(order_value_cents):,.2f}\n"
+                    f"Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
+                    f"Painel de Status: {ORDER_APPROVAL_PANEL_URL}\n"
+                )
+                success, error_message = send_email_with_optional_pdf(
+                    recipient=recipient,
+                    subject=subject,
+                    body=body,
+                    pdf_path=attachment_pdf_path,
+                )
+                notifications.append(
+                    {
+                        "kind": "signature_request",
+                        "to": recipient,
+                        "success": success,
+                        "error": error_message,
+                    }
+                )
+                routed_recipients.append(recipient)
+                record_order_email_log(
+                    conn,
+                    order_request_id=order_id,
+                    email_kind="signature_request",
+                    recipient=recipient,
+                    subject=subject,
+                    success=success,
+                    error_message=error_message,
+                )
+            manual_forwarded = [item for item in manual_recipients if item not in routed_recipients]
+            for recipient in manual_forwarded:
+                subject = f"[Encaminhamento manual] Pedido {resolved_order_number} - {resolved_customer_name}"
+                body = (
+                    "Encaminhamento manual solicitado no momento do envio para Status.\n\n"
+                    f"Solicitante: {user.name}\n"
+                    f"Pedido: {resolved_order_number}\n"
+                    f"Cliente: {resolved_customer_name}\n"
+                    f"Valor: R$ {cents_to_brl(order_value_cents):,.2f}\n"
+                    f"Status atual: {status}\n\n"
+                    f"Painel de Status: {ORDER_APPROVAL_PANEL_URL}\n"
+                )
+                success, error_message = send_email_with_optional_pdf(
+                    recipient=recipient,
+                    subject=subject,
+                    body=body,
+                    pdf_path=attachment_pdf_path,
+                )
+                notifications.append(
+                    {
+                        "kind": "manual_forward",
+                        "to": recipient,
+                        "success": success,
+                        "error": error_message,
+                    }
+                )
+                record_order_email_log(
+                    conn,
+                    order_request_id=order_id,
+                    email_kind="manual_forward",
+                    recipient=recipient,
+                    subject=subject,
+                    success=success,
+                    error_message=error_message,
+                )
+            record_order_event(
+                conn,
+                order_request_id=order_id,
+                event_type="ROUTED_SIGNATURE",
+                actor_user_id=int(user.id),
+                actor_name=user.name,
+                from_status=status,
+                to_status=status,
+                message="Pedido roteado para assinatura da Isabel.",
+                payload={
+                    "recipients": recipients,
+                    "manualRecipients": manual_forwarded,
+                    "routeByEmail": route_by_email,
+                },
+            )
+        else:
+            recipients = split_email_targets(config["isabel_emails"])
+            recipients.extend(list_active_admin_email_targets(conn))
+            deduped: list[str] = []
+            seen: set[str] = set()
+            for recipient in recipients:
+                if recipient not in seen:
+                    seen.add(recipient)
+                    deduped.append(recipient)
+            routed_recipients: list[str] = []
+            for recipient in deduped:
+                subject = f"[Sem limite cadastrado] Pedido {resolved_order_number} - {resolved_customer_name}"
+                body = (
+                    "Pedido bloqueado automaticamente por ausencia de limite cadastrado.\n\n"
+                    f"Pedido: {resolved_order_number}\n"
+                    f"Cliente: {resolved_customer_name}\n"
+                    f"Valor pedido: R$ {cents_to_brl(order_value_cents):,.2f}\n"
+                    f"Saldo em aberto: R$ {cents_to_brl(int(credit_snapshot['openBalanceCents'])):,.2f}\n"
+                    f"Limite de credito: R$ {cents_to_brl(int(credit_snapshot['creditLimitCents'])):,.2f}\n"
+                    f"Excesso: R$ {cents_to_brl(int(credit_snapshot['overLimitCents'])):,.2f}\n\n"
+                    "Status registrado como NEGADO_SEM_LIMITE. Cadastre/atualize o limite para seguir para assinatura."
+                )
+                success, error_message = send_email_with_optional_pdf(
+                    recipient=recipient,
+                    subject=subject,
+                    body=body,
+                    pdf_path=attachment_pdf_path,
+                )
+                notifications.append(
+                    {
+                        "kind": "credit_negative",
+                        "to": recipient,
+                        "success": success,
+                        "error": error_message,
+                    }
+                )
+                routed_recipients.append(recipient)
+                record_order_email_log(
+                    conn,
+                    order_request_id=order_id,
+                    email_kind="credit_negative",
+                    recipient=recipient,
+                    subject=subject,
+                    success=success,
+                    error_message=error_message,
+                )
+            manual_forwarded = [item for item in manual_recipients if item not in routed_recipients]
+            for recipient in manual_forwarded:
+                subject = f"[Encaminhamento manual] Pedido {resolved_order_number} - {resolved_customer_name}"
+                body = (
+                    "Encaminhamento manual solicitado no momento do envio para Status.\n\n"
+                    f"Solicitante: {user.name}\n"
+                    f"Pedido: {resolved_order_number}\n"
+                    f"Cliente: {resolved_customer_name}\n"
+                    f"Valor: R$ {cents_to_brl(order_value_cents):,.2f}\n"
+                    f"Status atual: {status}\n\n"
+                    "Observacao: cliente sem limite cadastrado, fluxo segue para tratativa.\n"
+                    f"Painel de Status: {ORDER_APPROVAL_PANEL_URL}\n"
+                )
+                success, error_message = send_email_with_optional_pdf(
+                    recipient=recipient,
+                    subject=subject,
+                    body=body,
+                    pdf_path=attachment_pdf_path,
+                )
+                notifications.append(
+                    {
+                        "kind": "manual_forward",
+                        "to": recipient,
+                        "success": success,
+                        "error": error_message,
+                    }
+                )
+                record_order_email_log(
+                    conn,
+                    order_request_id=order_id,
+                    email_kind="manual_forward",
+                    recipient=recipient,
+                    subject=subject,
+                    success=success,
+                    error_message=error_message,
+                )
+            record_order_event(
+                conn,
+                order_request_id=order_id,
+                event_type="NEGATIVE_REGISTERED",
+                actor_user_id=int(user.id),
+                actor_name=user.name,
+                from_status=status,
+                to_status=status,
+                message="Pedido registrado como negativo por ausencia de limite cadastrado.",
+                payload={
+                    "recipients": deduped,
+                    "manualRecipients": manual_forwarded,
+                    "routeByEmail": route_by_email,
+                },
+            )
+
+        failed_notifications = [item for item in notifications if not bool(item.get("success"))]
+        if failed_notifications:
+            smtp_missing = any(
+                str(item.get("error") or "").strip().lower().startswith("smtp_host nao configurado")
+                for item in failed_notifications
+            )
+            if smtp_missing:
+                warnings.append(
+                    "SMTP nao configurado no servidor. Configure SMTP_HOST/SMTP_PORT/SMTP_USERNAME/"
+                    "SMTP_PASSWORD/SMTP_FROM para envio de e-mail."
+                )
+
+            manual_failed_targets = sorted(
+                {
+                    str(item.get("to")).strip().lower()
+                    for item in failed_notifications
+                    if item.get("kind") == "manual_forward" and str(item.get("to") or "").strip()
+                }
+            )
+            if manual_failed_targets:
+                warnings.append(
+                    "Falha ao enviar encaminhamento manual para: "
+                    + ", ".join(manual_failed_targets)
+                    + "."
+                )
+
+            automatic_failed_count = len(
+                [item for item in failed_notifications if item.get("kind") != "manual_forward"]
+            )
+            if automatic_failed_count > 0:
+                warnings.append(
+                    f"{automatic_failed_count} envio(s) automatico(s) tambem falharam. "
+                    "Consulte Status > Historico para detalhes."
+                )
+
+        conn.execute(
+            """
+            UPDATE order_requests
+            SET distribution_json = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                json.dumps(
+                    {
+                        "notifications": notifications,
+                        "smtpConfigured": bool(SMTP_HOST),
+                        "routeByEmail": route_by_email,
+                        "manualRecipients": manual_recipients,
+                        "attachClientAnalysis": attach_client_analysis,
+                        "analysisPdfGenerated": bool(analysis_pdf_path),
+                        "warnings": warnings,
+                    },
+                    ensure_ascii=False,
+                ),
+                utc_now_iso(),
+                order_id,
+            ),
+        )
+        conn.commit()
+        created = fetch_order_row_or_404(conn, order_id)
+
+    return {
+        "order": serialize_order_row(created),
+        "credit": {
+            "approved": credit_snapshot["approved"],
+            "openBalance": cents_to_brl(int(credit_snapshot["openBalanceCents"])),
+            "creditLimit": cents_to_brl(int(credit_snapshot["creditLimitCents"])),
+            "overLimit": cents_to_brl(int(credit_snapshot["overLimitCents"])),
+            "reason": status_reason,
+        },
+        "warnings": warnings,
+    }
+
+
+@app.get("/api/pedidos/status")
+def pedidos_status(
+    status: str | None = None,
+    customer: str | None = None,
+    dateFrom: str | None = None,
+    dateTo: str | None = None,
+    limit: int = 300,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    user = get_current_user_from_header(authorization)
+    ensure_status_access(user)
+
+    filters: list[str] = []
+    params: list[object] = []
+    if status and status in ORDER_STATUS_ALL:
+        filters.append("o.status = ?")
+        params.append(status)
+    else:
+        filters.append("o.status <> ?")
+        params.append(ORDER_STATUS_DELETED)
+    if customer:
+        filters.append("o.customer_name LIKE ?")
+        params.append(f"%{customer.strip()}%")
+    if dateFrom:
+        filters.append("substr(o.created_at, 1, 10) >= ?")
+        params.append(str(dateFrom))
+    if dateTo:
+        filters.append("substr(o.created_at, 1, 10) <= ?")
+        params.append(str(dateTo))
+
+    where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+    capped_limit = max(1, min(int(limit), 1000))
+    params.append(capped_limit)
+
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                o.*,
+                cons.name AS consultant_name,
+                req.name AS requested_by_name,
+                signer.name AS signed_by_name
+            FROM order_requests o
+            JOIN consultants cons ON cons.id = o.consultant_id
+            JOIN consultants req ON req.id = o.requested_by_user_id
+            LEFT JOIN consultants signer ON signer.id = o.signed_by_user_id
+            {where_sql}
+            ORDER BY o.created_at DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+
+    items = []
+    for row in rows:
+        payload = serialize_order_row(dict(row))
+        payload["consultantName"] = row["consultant_name"]
+        payload["requestedByName"] = row["requested_by_name"]
+        payload["signedByName"] = row["signed_by_name"]
+        items.append(payload)
+    return {"items": items}
+
+
+@app.get("/api/pedidos/resumo")
+def pedidos_resumo(
+    authorization: str | None = Header(default=None),
+) -> dict:
+    user = get_current_user_from_header(authorization)
+    ensure_status_access(user)
+
+    today_iso = datetime.now(timezone.utc).date().isoformat()
+    with get_connection() as conn:
+        total = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM order_requests WHERE status <> ?",
+                (ORDER_STATUS_DELETED,),
+            ).fetchone()[0]
+        )
+        pending = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM order_requests WHERE status = ? AND status <> ?",
+                (ORDER_STATUS_AWAITING_SIGNATURE, ORDER_STATUS_DELETED),
+            ).fetchone()[0]
+        )
+        negative = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM order_requests WHERE status = ? AND status <> ?",
+                (ORDER_STATUS_NEGATIVE, ORDER_STATUS_DELETED),
+            ).fetchone()[0]
+        )
+        returned = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM order_requests WHERE status = ? AND status <> ?",
+                (ORDER_STATUS_RETURNED, ORDER_STATUS_DELETED),
+            ).fetchone()[0]
+        )
+        done = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM order_requests WHERE status = ? AND status <> ?",
+                (ORDER_STATUS_DONE, ORDER_STATUS_DELETED),
+            ).fetchone()[0]
+        )
+        billed = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM order_requests WHERE status = ? AND status <> ?",
+                (ORDER_STATUS_BILLED, ORDER_STATUS_DELETED),
+            ).fetchone()[0]
+        )
+        signed_today = int(
+            conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM order_requests
+                WHERE signed_at IS NOT NULL
+                  AND status <> ?
+                  AND substr(signed_at, 1, 10) = ?
+                """,
+                (ORDER_STATUS_DELETED, today_iso),
+            ).fetchone()[0]
+        )
+
+    return {
+        "total": total,
+        "pendingSignature": pending,
+        "negativeNoLimit": negative,
+        "returnedForReview": returned,
+        "done": done,
+        "billed": billed,
+        "signedToday": signed_today,
+    }
+
+
+@app.get("/api/pedidos/comprovantes")
+def pedidos_comprovantes_financeiros(
+    customer: str | None = None,
+    dateFrom: str | None = None,
+    dateTo: str | None = None,
+    limit: int = 300,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    user = get_current_user_from_header(authorization)
+    ensure_financial_receipts_access(user)
+
+    filters: list[str] = ["o.status IN (?, ?)"]
+    params: list[object] = [ORDER_STATUS_DONE, ORDER_STATUS_BILLED]
+
+    if customer:
+        filters.append("o.customer_name LIKE ?")
+        params.append(f"%{customer.strip()}%")
+    if dateFrom:
+        filters.append("substr(o.created_at, 1, 10) >= ?")
+        params.append(str(dateFrom))
+    if dateTo:
+        filters.append("substr(o.created_at, 1, 10) <= ?")
+        params.append(str(dateTo))
+
+    where_sql = f"WHERE {' AND '.join(filters)}"
+    capped_limit = max(1, min(int(limit), 1000))
+    params.append(capped_limit)
+
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                o.*,
+                cons.name AS consultant_name,
+                req.name AS requested_by_name,
+                signer.name AS signed_by_name
+            FROM order_requests o
+            JOIN consultants cons ON cons.id = o.consultant_id
+            JOIN consultants req ON req.id = o.requested_by_user_id
+            LEFT JOIN consultants signer ON signer.id = o.signed_by_user_id
+            {where_sql}
+            ORDER BY o.updated_at DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+
+    items: list[dict] = []
+    for row in rows:
+        payload = serialize_order_row(dict(row))
+        payload["consultantName"] = row["consultant_name"]
+        payload["requestedByName"] = row["requested_by_name"]
+        payload["signedByName"] = row["signed_by_name"]
+        items.append(payload)
+    return {"items": items}
+
+
+@app.post("/api/pedidos/{order_id}/assinar")
+def pedidos_assinar(
+    order_id: int,
+    payload: dict,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    user = get_current_user_from_header(authorization)
+    ensure_operational_user(user)
+
+    signature_mode = str(payload.get("signatureMode") or ORDER_SIGNATURE_MODE).strip().lower()
+    if signature_mode not in {"canvas", "hash"}:
+        raise HTTPException(status_code=400, detail="Modo de assinatura invalido.")
+
+    canvas_payload = payload.get("signatureCanvasBase64")
+    signature_canvas_bytes = decode_canvas_signature(canvas_payload)
+    signature_image_path: Path | None = None
+    if signature_mode == "canvas":
+        if not signature_canvas_bytes:
+            raise HTTPException(status_code=400, detail="Assinatura manuscrita obrigatoria no modo canvas.")
+        signature_image_path = ORDER_SIGNATURE_DIR / f"{order_id}.png"
+        signature_image_path.write_bytes(signature_canvas_bytes)
+
+    with get_connection() as conn:
+        order_row = fetch_order_row_or_404(conn, order_id)
+        if order_row["status"] != ORDER_STATUS_AWAITING_SIGNATURE:
+            raise HTTPException(status_code=409, detail="Pedido nao esta aguardando assinatura.")
+
+        original_pdf_path = Path(order_row["original_pdf_path"])
+        signed_pdf_path = ORDER_SIGNED_DIR / f"{order_row['external_id']}-signed.pdf"
+        signature_hash, final_size = generate_signed_order_pdf(
+            original_pdf_path=original_pdf_path,
+            signed_pdf_path=signed_pdf_path,
+            signature_image_path=signature_image_path,
+            order_number=order_row["order_number"],
+            customer_name=order_row["customer_name"],
+            order_value_cents=int(order_row["order_value_cents"]),
+            signed_by_name=user.name,
+            signature_mode=signature_mode,
+        )
+
+        now_iso = utc_now_iso()
+        conn.execute(
+            """
+            UPDATE order_requests
+            SET
+                status = ?,
+                signed_pdf_path = ?,
+                signature_mode = ?,
+                signature_hash = ?,
+                signature_canvas_path = ?,
+                signed_by_user_id = ?,
+                signed_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                ORDER_STATUS_SIGNED_DISTRIBUTING,
+                signed_pdf_path.as_posix(),
+                signature_mode,
+                signature_hash,
+                signature_image_path.as_posix() if signature_image_path else None,
+                int(user.id),
+                now_iso,
+                now_iso,
+                int(order_id),
+            ),
+        )
+        record_order_event(
+            conn,
+            order_request_id=order_id,
+            event_type="SIGNED",
+            actor_user_id=int(user.id),
+            actor_name=user.name,
+            from_status=order_row["status"],
+            to_status=ORDER_STATUS_SIGNED_DISTRIBUTING,
+            message=f"Pedido assinado digitalmente por {user.name}.",
+            payload={
+                "signatureMode": signature_mode,
+                "signedPdfSizeBytes": final_size,
+            },
+        )
+
+        config = ensure_order_email_config(conn)
+        notifications: list[dict] = []
+        requester_email = get_requester_email(conn, int(order_row["requested_by_user_id"]))
+
+        vitor_targets = split_email_targets(config["vitor_emails"])
+        marcos_targets = split_email_targets(config["marcos_emails"])
+        isabel_targets = split_email_targets(config["isabel_emails"])
+        if user.email:
+            isabel_targets.extend(split_email_targets(user.email))
+
+        via3_targets = marcos_targets.copy()
+        if requester_email:
+            via3_targets.append(requester_email)
+        via3_targets = list(dict.fromkeys(via3_targets))
+        isabel_targets = list(dict.fromkeys(isabel_targets))
+
+        def send_and_log(kind: str, recipients: list[str], subject: str, body: str) -> None:
+            for recipient in recipients:
+                success, error_message = send_email_with_optional_pdf(
+                    recipient=recipient,
+                    subject=subject,
+                    body=body,
+                    pdf_path=signed_pdf_path,
+                )
+                notifications.append(
+                    {
+                        "kind": kind,
+                        "to": recipient,
+                        "success": success,
+                        "error": error_message,
+                    }
+                )
+                record_order_email_log(
+                    conn,
+                    order_request_id=order_id,
+                    email_kind=kind,
+                    recipient=recipient,
+                    subject=subject,
+                    success=success,
+                    error_message=error_message,
+                )
+
+        common_body = (
+            f"Pedido: {order_row['order_number']}\n"
+            f"Cliente: {order_row['customer_name']}\n"
+            f"Valor: R$ {cents_to_brl(int(order_row['order_value_cents'])):,.2f}\n"
+            f"Data assinatura: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n"
+        )
+        send_and_log(
+            "via1_vitor",
+            vitor_targets,
+            f"[Via 1/4] Pedido aprovado {order_row['order_number']}",
+            "Primeira via digital do pedido aprovado.\n\n" + common_body,
+        )
+        send_and_log(
+            "via2_vitor",
+            vitor_targets,
+            f"[Via 2/4] Confirmacao pedido {order_row['order_number']}",
+            "Segunda via digital para confirmacao de recebimento.\n\n" + common_body,
+        )
+        send_and_log(
+            "via3_marcos_admin",
+            via3_targets,
+            f"[Via 3/4] Pedido aprovado {order_row['order_number']}",
+            "Terceira via digital destinada a Marcos e administrador iniciador.\n\n" + common_body,
+        )
+        send_and_log(
+            "via4_isabel",
+            isabel_targets,
+            f"[Via 4/4] Confirmacao assinatura {order_row['order_number']}",
+            "Quarta via: confirmacao de registro da assinatura digital.\n\n" + common_body,
+        )
+
+        failed = [item for item in notifications if not item["success"]]
+        finish_reason = (
+            "Concluido com falhas em parte dos envios de e-mail."
+            if failed
+            else "Concluido com distribuicao digital completa."
+        )
+        conn.execute(
+            """
+            UPDATE order_requests
+            SET
+                status = ?,
+                status_reason = ?,
+                distribution_json = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                ORDER_STATUS_DONE,
+                finish_reason,
+                json.dumps({"notifications": notifications}, ensure_ascii=False),
+                utc_now_iso(),
+                int(order_id),
+            ),
+        )
+        record_order_event(
+            conn,
+            order_request_id=order_id,
+            event_type="DISTRIBUTED",
+            actor_user_id=int(user.id),
+            actor_name=user.name,
+            from_status=ORDER_STATUS_SIGNED_DISTRIBUTING,
+            to_status=ORDER_STATUS_DONE,
+            message=finish_reason,
+            payload={"failedCount": len(failed)},
+        )
+        conn.commit()
+        done_row = fetch_order_row_or_404(conn, order_id)
+
+    return {
+        "order": serialize_order_row(done_row),
+        "downloadUrl": f"/api/pedidos/{order_id}/download",
+        "signatureMode": signature_mode,
+        "failedEmails": len(failed),
+    }
+
+
+@app.post("/api/pedidos/{order_id}/assinar-concluir")
+def pedidos_assinar_concluir(
+    order_id: int,
+    payload: dict,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    sign_result = pedidos_assinar(order_id=order_id, payload=payload, authorization=authorization)
+    billing_note_raw = str(payload.get("billingNote") or "").strip()
+    auto_note = "Baixa automatica apos assinatura e aprovacao digital."
+    billing_note = f"{auto_note} Obs: {billing_note_raw}" if billing_note_raw else auto_note
+    billed_result = pedidos_faturar(
+        order_id=order_id,
+        payload={"note": billing_note},
+        authorization=authorization,
+    )
+
+    return {
+        "order": billed_result["order"],
+        "downloadUrl": sign_result.get("downloadUrl"),
+        "signatureMode": sign_result.get("signatureMode"),
+        "failedEmails": int(sign_result.get("failedEmails") or 0),
+        "billed": True,
+    }
+
+
+@app.post("/api/pedidos/{order_id}/assinar-preview")
+def pedidos_assinar_preview(
+    order_id: int,
+    payload: dict,
+    authorization: str | None = Header(default=None),
+):
+    user = get_current_user_from_header(authorization)
+    signature_canvas_bytes = decode_canvas_signature(payload.get("signatureCanvasBase64"))
+    if not signature_canvas_bytes:
+        raise HTTPException(status_code=400, detail="Desenhe a assinatura antes de gerar o PDF.")
+
+    with get_connection() as conn:
+        order_row = fetch_order_row_or_404(conn, order_id)
+        ensure_order_access(user, order_row)
+        if order_row["status"] == ORDER_STATUS_DELETED:
+            raise HTTPException(status_code=409, detail="Solicitacao excluida nao pode gerar assinatura manual.")
+
+        signed_path = Path(order_row["signed_pdf_path"]) if order_row.get("signed_pdf_path") else None
+        source_pdf_path = signed_path if signed_path and signed_path.exists() else Path(order_row["original_pdf_path"])
+        if not source_pdf_path.exists():
+            raise HTTPException(status_code=404, detail="PDF base do pedido nao encontrado.")
+
+        signature_image_path = ORDER_SIGNATURE_DIR / f"preview-{order_id}-{uuid.uuid4().hex[:8]}.png"
+        signature_image_path.write_bytes(signature_canvas_bytes)
+        preview_pdf_path = ORDER_SIGNED_DIR / f"{order_row['external_id']}-preview-{uuid.uuid4().hex[:8]}.pdf"
+        try:
+            generate_signed_order_pdf(
+                original_pdf_path=source_pdf_path,
+                signed_pdf_path=preview_pdf_path,
+                signature_image_path=signature_image_path,
+                order_number=order_row["order_number"],
+                customer_name=order_row["customer_name"],
+                order_value_cents=int(order_row["order_value_cents"]),
+                signed_by_name=user.name,
+                signature_mode="canvas",
+            )
+        finally:
+            signature_image_path.unlink(missing_ok=True)
+
+        record_order_event(
+            conn,
+            order_request_id=int(order_id),
+            event_type="MANUAL_SIGNATURE_PREVIEW",
+            actor_user_id=int(user.id),
+            actor_name=user.name,
+            from_status=order_row["status"],
+            to_status=order_row["status"],
+            message="PDF gerado com assinatura manual sem alterar o status.",
+            payload={"previewPdfPath": preview_pdf_path.as_posix()},
+        )
+        conn.commit()
+
+    filename = f"{order_row['order_number']}-assinado-manual.pdf"
+    return FileResponse(path=preview_pdf_path, media_type="application/pdf", filename=filename)
+
+
+@app.post("/api/pedidos/{order_id}/faturar")
+def pedidos_faturar(
+    order_id: int,
+    payload: dict,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    user = get_current_user_from_header(authorization)
+    ensure_operational_user(user)
+    note = str(payload.get("note") or "").strip()
+
+    with get_connection() as conn:
+        order_row = fetch_order_row_or_404(conn, order_id)
+        if order_row["status"] == ORDER_STATUS_DELETED:
+            raise HTTPException(status_code=409, detail="Solicitacao excluida nao pode ser faturada.")
+        if order_row["status"] == ORDER_STATUS_BILLED:
+            return {"order": serialize_order_row(order_row)}
+        if order_row["status"] != ORDER_STATUS_DONE:
+            raise HTTPException(
+                status_code=409,
+                detail="Somente pedidos concluidos podem receber baixa de faturado.",
+            )
+
+        status_reason = f"Pedido faturado por {user.name}."
+        if note:
+            status_reason = f"{status_reason} Obs: {note}"
+
+        conn.execute(
+            """
+            UPDATE order_requests
+            SET
+                status = ?,
+                status_reason = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                ORDER_STATUS_BILLED,
+                status_reason,
+                utc_now_iso(),
+                int(order_id),
+            ),
+        )
+        record_order_event(
+            conn,
+            order_request_id=int(order_id),
+            event_type="BILLED",
+            actor_user_id=int(user.id),
+            actor_name=user.name,
+            from_status=order_row["status"],
+            to_status=ORDER_STATUS_BILLED,
+            message=status_reason,
+            payload={"note": note or None},
+        )
+        conn.commit()
+        updated = fetch_order_row_or_404(conn, order_id)
+
+    return {"order": serialize_order_row(updated)}
+
+
+@app.post("/api/pedidos/{order_id}/devolver")
+def pedidos_devolver(
+    order_id: int,
+    payload: dict,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    user = get_current_user_from_header(authorization)
+    ensure_isabel(user)
+
+    reason = str(payload.get("reason") or payload.get("justificativa") or "").strip()
+    if len(reason) < 5:
+        raise HTTPException(status_code=400, detail="Justificativa obrigatoria com no minimo 5 caracteres.")
+
+    with get_connection() as conn:
+        order_row = fetch_order_row_or_404(conn, order_id)
+        if order_row["status"] != ORDER_STATUS_AWAITING_SIGNATURE:
+            raise HTTPException(status_code=409, detail="Pedido nao esta pendente para devolucao.")
+        conn.execute(
+            """
+            UPDATE order_requests
+            SET
+                status = ?,
+                returned_reason = ?,
+                status_reason = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                ORDER_STATUS_RETURNED,
+                reason,
+                "Pedido devolvido para revisao pela Isabel.",
+                utc_now_iso(),
+                int(order_id),
+            ),
+        )
+        record_order_event(
+            conn,
+            order_request_id=order_id,
+            event_type="RETURNED",
+            actor_user_id=int(user.id),
+            actor_name=user.name,
+            from_status=order_row["status"],
+            to_status=ORDER_STATUS_RETURNED,
+            message=reason,
+        )
+        conn.commit()
+        updated = fetch_order_row_or_404(conn, order_id)
+
+    return {"order": serialize_order_row(updated)}
+
+
+@app.delete("/api/pedidos/{order_id}")
+def pedidos_excluir(
+    order_id: int,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    user = get_current_user_from_header(authorization)
+    ensure_operational_user(user)
+
+    with get_connection() as conn:
+        order_row = fetch_order_row_or_404(conn, order_id)
+        if order_row["status"] == ORDER_STATUS_DELETED:
+            raise HTTPException(status_code=409, detail="Solicitacao ja foi excluida.")
+
+        now_iso = utc_now_iso()
+        conn.execute(
+            """
+            UPDATE order_requests
+            SET
+                status = ?,
+                status_reason = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                ORDER_STATUS_DELETED,
+                f"Solicitacao excluida manualmente por {user.name}.",
+                now_iso,
+                int(order_id),
+            ),
+        )
+        record_order_event(
+            conn,
+            order_request_id=int(order_id),
+            event_type="DELETED",
+            actor_user_id=int(user.id),
+            actor_name=user.name,
+            from_status=order_row["status"],
+            to_status=ORDER_STATUS_DELETED,
+            message="Solicitacao removida da fila de acompanhamento.",
+        )
+        conn.commit()
+        updated = fetch_order_row_or_404(conn, order_id)
+
+    return {"order": serialize_order_row(updated)}
+
+
+@app.get("/api/pedidos/{order_id}/status")
+def pedidos_status_by_id(
+    order_id: int,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    user = get_current_user_from_header(authorization)
+    with get_connection() as conn:
+        order_row = fetch_order_row_or_404(conn, order_id)
+        ensure_order_access(user, order_row)
+        events = conn.execute(
+            """
+            SELECT event_type, actor_name, from_status, to_status, message, payload_json, created_at
+            FROM order_request_events
+            WHERE order_request_id = ?
+            ORDER BY id DESC
+            """,
+            (int(order_id),),
+        ).fetchall()
+
+    return {
+        "order": serialize_order_row(order_row),
+        "events": [
+            {
+                "eventType": row["event_type"],
+                "actorName": row["actor_name"],
+                "fromStatus": row["from_status"],
+                "toStatus": row["to_status"],
+                "message": row["message"],
+                "payload": json.loads(row["payload_json"] or "{}"),
+                "createdAt": row["created_at"],
+            }
+            for row in events
+        ],
+    }
+
+
+@app.get("/api/pedidos/{order_id}/download")
+def pedidos_download(
+    order_id: int,
+    authorization: str | None = Header(default=None),
+):
+    user = get_current_user_from_header(authorization)
+    with get_connection() as conn:
+        order_row = fetch_order_row_or_404(conn, order_id)
+        ensure_order_access(user, order_row)
+
+    signed_path = Path(order_row["signed_pdf_path"]) if order_row.get("signed_pdf_path") else None
+    file_path = signed_path if signed_path and signed_path.exists() else Path(order_row["original_pdf_path"])
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Arquivo PDF nao encontrado.")
+
+    filename = (
+        f"{order_row['order_number']}-assinado.pdf"
+        if signed_path and signed_path.exists()
+        else f"{order_row['order_number']}-original.pdf"
+    )
+    return FileResponse(path=file_path, media_type="application/pdf", filename=filename)
+
+
+@app.get("/api/pedidos/{order_id}/download-analise")
+def pedidos_download_analise(
+    order_id: int,
+    authorization: str | None = Header(default=None),
+):
+    user = get_current_user_from_header(authorization)
+    with get_connection() as conn:
+        order_row = fetch_order_row_or_404(conn, order_id)
+        ensure_order_access(user, order_row)
+
+        analysis_path_raw = str(order_row.get("analysis_pdf_path") or "").strip()
+        analysis_pdf_path = Path(analysis_path_raw) if analysis_path_raw else None
+
+        if analysis_pdf_path is None or not analysis_pdf_path.exists():
+            receivable_rows, consultant_name = fetch_order_customer_receivables(
+                conn,
+                consultant_id=int(order_row["consultant_id"]),
+                customer_code=order_row.get("customer_code"),
+                customer_name=order_row.get("customer_name"),
+            )
+            credit_snapshot = {
+                "openBalanceCents": int(order_row.get("open_balance_cents") or 0),
+                "creditLimitCents": int(order_row.get("credit_limit_cents") or 0),
+                "overLimitCents": int(order_row.get("over_limit_cents") or 0),
+            }
+            analysis_pdf_path = generate_client_analysis_attachment_pdf(
+                external_id=str(order_row["external_id"]),
+                consultant_name=consultant_name,
+                customer_name=str(order_row["customer_name"] or ""),
+                customer_code=order_row.get("customer_code"),
+                order_number=str(order_row["order_number"] or ""),
+                order_value_cents=int(order_row.get("order_value_cents") or 0),
+                credit_snapshot=credit_snapshot,
+                receivable_rows=receivable_rows,
+            )
+            conn.execute(
+                """
+                UPDATE order_requests
+                SET analysis_pdf_path = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (analysis_pdf_path.as_posix(), utc_now_iso(), int(order_id)),
+            )
+            record_order_event(
+                conn,
+                order_request_id=int(order_id),
+                event_type="ANALYSIS_ATTACHMENT_GENERATED",
+                actor_user_id=int(user.id),
+                actor_name=user.name,
+                from_status=order_row["status"],
+                to_status=order_row["status"],
+                message="Anexo de analise financeira gerado para visualizacao.",
+                payload={"analysisPdfPath": analysis_pdf_path.as_posix(), "onDemand": True},
+            )
+            conn.commit()
+
+    if analysis_pdf_path is None or not analysis_pdf_path.exists():
+        raise HTTPException(status_code=404, detail="Anexo de saude financeira nao encontrado para este pedido.")
+
+    filename = f"{order_row['order_number']}-analise-cliente.pdf"
+    return FileResponse(path=analysis_pdf_path, media_type="application/pdf", filename=filename)
+
+
+@app.get("/api/pedidos/{order_id}/assinatura")
+def pedidos_assinatura_download(
+    order_id: int,
+    authorization: str | None = Header(default=None),
+):
+    user = get_current_user_from_header(authorization)
+    with get_connection() as conn:
+        order_row = fetch_order_row_or_404(conn, order_id)
+        ensure_order_access(user, order_row)
+
+    signature_path_raw = str(order_row.get("signature_canvas_path") or "").strip()
+    signature_path = Path(signature_path_raw) if signature_path_raw else None
+    if signature_path and signature_path.exists():
+        filename = f"{order_row['order_number']}-assinatura.png"
+        return FileResponse(path=signature_path, media_type="image/png", filename=filename)
+
+    if str(order_row.get("signature_mode") or "").strip().lower() == "hash":
+        raise HTTPException(
+            status_code=404,
+            detail="Assinatura registrada em modo hash (sem desenho manual). Consulte o PDF assinado.",
+        )
+    raise HTTPException(status_code=404, detail="Assinatura manual registrada nao encontrada.")
+
+
+@app.get("/api/pedidos/config")
+def pedidos_config_get(
+    authorization: str | None = Header(default=None),
+) -> dict:
+    user = get_current_user_from_header(authorization)
+    ensure_status_access(user)
+    with get_connection() as conn:
+        config = ensure_order_email_config(conn)
+        updated_by = (
+            conn.execute(
+                "SELECT name FROM consultants WHERE id = ?",
+                (config["updated_by_user_id"],),
+            ).fetchone()
+            if config.get("updated_by_user_id")
+            else None
+        )
+
+    return {
+        "config": {
+            "isabelEmails": split_email_targets(config.get("isabel_emails")),
+            "vitorEmails": split_email_targets(config.get("vitor_emails")),
+            "marcosEmails": split_email_targets(config.get("marcos_emails")),
+            "updatedBy": updated_by["name"] if updated_by else None,
+            "updatedAt": config.get("updated_at"),
+            "createdAt": config.get("created_at"),
+        }
+    }
+
+
+@app.put("/api/pedidos/config")
+def pedidos_config_update(
+    payload: dict,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    user = get_current_user_from_header(authorization)
+    ensure_operational_user(user)
+
+    def join_payload_emails(key: str) -> str:
+        raw_value = payload.get(key, [])
+        if isinstance(raw_value, list):
+            return ",".join(str(item) for item in raw_value)
+        return str(raw_value or "")
+
+    isabel_emails = normalize_email_targets(join_payload_emails("isabelEmails"))
+    vitor_emails = normalize_email_targets(join_payload_emails("vitorEmails"))
+    marcos_emails = normalize_email_targets(join_payload_emails("marcosEmails"))
+    if not isabel_emails or not vitor_emails or not marcos_emails:
+        raise HTTPException(status_code=400, detail="Isabel, Vitor e Marcos precisam de ao menos um e-mail.")
+
+    with get_connection() as conn:
+        _ = ensure_order_email_config(conn)
+        conn.execute(
+            """
+            UPDATE order_email_config
+            SET
+                isabel_emails = ?,
+                vitor_emails = ?,
+                marcos_emails = ?,
+                updated_by_user_id = ?,
+                updated_at = ?
+            WHERE id = 1
+            """,
+            (
+                isabel_emails,
+                vitor_emails,
+                marcos_emails,
+                int(user.id),
+                utc_now_iso(),
+            ),
+        )
+        conn.commit()
+        updated = ensure_order_email_config(conn)
+
+    return {
+        "config": {
+            "isabelEmails": split_email_targets(updated.get("isabel_emails")),
+            "vitorEmails": split_email_targets(updated.get("vitor_emails")),
+            "marcosEmails": split_email_targets(updated.get("marcos_emails")),
+            "updatedAt": updated.get("updated_at"),
+        }
+    }
+
+
+@app.get("/api/pedidos/admin-emails")
+def pedidos_admin_emails(
+    authorization: str | None = Header(default=None),
+) -> dict:
+    user = get_current_user_from_header(authorization)
+    ensure_operational_user(user)
+    return {"items": list_active_admin_users()}
+
+
+@app.put("/api/pedidos/admin-emails/{consultant_id}")
+def pedidos_admin_email_update(
+    consultant_id: int,
+    payload: dict,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    user = get_current_user_from_header(authorization)
+    ensure_operational_user(user)
+
+    consultant = get_consultant_by_id(int(consultant_id))
+    if not consultant or not consultant.get("is_admin"):
+        raise HTTPException(status_code=404, detail="Administrador nao encontrado.")
+
+    email = normalize_email_value(payload.get("email"))
+    update_consultant_email(consultant_id=int(consultant_id), email=email)
+    updated = get_consultant_by_id(int(consultant_id))
+    return {
+        "item": {
+            "id": int(updated["id"]),
+            "name": updated["name"],
+            "username": updated["username"],
+            "email": updated["email"],
+        }
+    }
 
 
 @app.get("/", include_in_schema=False, response_model=None)

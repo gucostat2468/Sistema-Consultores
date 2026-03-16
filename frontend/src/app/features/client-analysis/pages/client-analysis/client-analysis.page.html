@@ -34,11 +34,17 @@
         </section>
       }
 
+      @if (orderFeedback()) {
+        <section class="state state-success">
+          <p>{{ orderFeedback() }}</p>
+        </section>
+      }
+
       <section class="filters card">
         <label>
           Cliente analisado
           <select [ngModel]="selectedClientKey() ?? ''" (ngModelChange)="selectClient($event)">
-            @for (item of clientOptions(); track item.key) {
+            @for (item of clientOptions(); track item.key + '::' + $index) {
               <option [value]="item.key">{{ item.label }}</option>
             }
           </select>
@@ -85,6 +91,17 @@
             Cruzamento do saldo em aberto com limite da empresa para decisao comercial mais segura.
           </p>
         </header>
+
+        <section class="approval-cta">
+          <p>
+            @if (selectedClientHasLimit()) {
+              Cliente com limite cadastrado: encaminhe o pedido para assinatura digital da Isabel.
+            } @else {
+              Cliente sem limite cadastrado: encaminhamento gera status NEGADO_SEM_LIMITE para tratativa com Isabel.
+            }
+          </p>
+          <button type="button" (click)="openForwardModal()">Encaminhar pedido para aprovação</button>
+        </section>
 
         <section class="credit-onboarding">
           <div class="credit-onboarding-head">
@@ -134,26 +151,12 @@
               </span>
             </article>
             <article class="credit-overview">
-              <p>
-                Cobertura do saldo
-                <span
-                  class="inline-help"
-                  title="Mostra quanto do saldo em aberto pode ser coberto pelo limite disponivel."
-                  aria-label="Ajuda: cobertura do saldo"
-                >?</span>
-              </p>
+              <p>Cobertura do saldo</p>
               <strong>{{ percent(selectedCreditCoverageRatio()) }}</strong>
               <span>Disponivel para cada R$ 1 em aberto</span>
             </article>
             <article class="credit-overview">
-              <p>
-                Necessidade imediata
-                <span
-                  class="inline-help"
-                  title="Valor adicional necessario para cobrir 100% da divida atual com o limite disponivel."
-                  aria-label="Ajuda: necessidade imediata"
-                >?</span>
-              </p>
+              <p>Necessidade imediata</p>
               <strong>{{ currency(panel.gap) }}</strong>
               <span>{{ creditNeedLabel(panel.gap) }}</span>
             </article>
@@ -171,16 +174,9 @@
               <span>Relacao principal para decisao</span>
             </article>
             <article class="mini-kpi">
-              <p>
-                Divida / Disponivel
-                <span
-                  class="inline-help"
-                  title="Compara a divida atual com o limite disponivel agora. Quanto maior, maior a pressao financeira."
-                  aria-label="Ajuda: divida por disponivel"
-                >?</span>
-              </p>
-              <strong>{{ percent(panel.debtToAvailableRatio) }}</strong>
-              <span>{{ currency(panel.debtTotal) }} sobre {{ currency(panel.available) }}</span>
+              <p>Divida / Disponivel</p>
+              <strong>{{ debtToAvailableLabel(panel) }}</strong>
+              <span>{{ debtToAvailableHint(panel) }}</span>
             </article>
             <article class="mini-kpi">
               <p>Risco vencido</p>
@@ -306,7 +302,7 @@
             @for (row of matrix(); track row.label) {
               <div class="matrix-row" [ngClass]="matrixRowClass(row)">
                 <strong>{{ row.label }}</strong>
-                @for (cell of row.cells; track cell.amount + '-' + cell.count) {
+                @for (cell of row.cells; track $index) {
                   <div class="cell" [style]="matrixCellStyle(cell, row.tone)">
                     <p>{{ cell.count }} tit.</p>
                     <strong>{{ currency(cell.amount) }}</strong>
@@ -346,4 +342,13 @@
       </section>
     }
   }
+}
+
+@if (modalOpen() && selectedClient(); as client) {
+  <app-encaminhar-modal
+    [visible]="true"
+    [client]="client"
+    (closed)="closeForwardModal()"
+    (forwarded)="onOrderForwarded()"
+  />
 }

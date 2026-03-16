@@ -219,6 +219,12 @@ select {
   }
 }
 
+@media (max-width: 960px) {
+  .filters {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 720px) {
   .filters {
     grid-template-columns: 1fr;

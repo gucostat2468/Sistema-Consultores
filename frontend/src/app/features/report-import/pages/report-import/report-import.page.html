@@ -1,13 +1,13 @@
 @if (!isAdmUser) {
   <section class="card state state-error">
-    <p>Area restrita. Somente o usuário <strong>adm</strong> pode importar arquivos.</p>
+    <p>Area restrita. Somente <strong>Marcos e Isabel</strong> podem importar arquivos.</p>
   </section>
 } @else {
   <section class="card intro">
-    <h2>Atualizacao Report (padrao fixo)</h2>
+    <h2>Atualizacao de Planilhas (modo flexivel)</h2>
     <p>
-      Use esta tela somente para planilhas no padrao:
-      <strong>vencimento | NF | Cliente | valor parcela</strong>.
+      Esta tela aceita planilhas de layout variado (<strong>.xls, .xlsx, .xlsm, .csv</strong>).
+      O sistema tenta detectar colunas automaticamente e aplicar fallback quando o formato nao segue padrao fixo.
     </p>
     <p>
       Fluxo focado em consulta por empresa. Se o arquivo vier sem consultor, o sistema classifica automaticamente em
@@ -19,7 +19,7 @@
     </p>
     <p>
       <strong>Limpar dados:</strong> remove toda a base operacional para recomecar do zero. Acao restrita ao
-      <strong>adm</strong>.
+      <strong>Marcos e Isabel</strong>.
     </p>
   </section>
 
@@ -47,10 +47,10 @@
 
   <section class="card form-card">
     <label>
-      Arquivo report (.xls, .xlsx, .xlsm)
+      Arquivo planilha (.xls, .xlsx, .xlsm, .csv)
       <input
         type="file"
-        accept=".xls,.xlsx,.xlsm,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel.sheet.macroEnabled.12"
+        accept=".xls,.xlsx,.xlsm,.csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel.sheet.macroEnabled.12,text/csv"
         (change)="setReportFile($event)"
       />
       <span class="file-name">{{ excelFile()?.name || 'nenhum arquivo selecionado' }}</span>

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Iterable
@@ -79,6 +79,13 @@ CUSTOMER_HINT_STOPWORDS = {
 HEADER_ALIASES: dict[str, set[str]] = {
     "dueDate": {
         "vencimento",
+        "venc",
+        "vcto",
+        "vencto",
+        "dt vcto",
+        "dt vencto",
+        "data",
+        "data de vencimento",
         "vencto",
         "data vencimento",
         "dt vencimento",
@@ -86,12 +93,20 @@ HEADER_ALIASES: dict[str, set[str]] = {
     "documentRef": {
         "nf",
         "nt",
+        "nf/nt",
+        "nota fiscal",
+        "titulo",
+        "duplicata",
         "documento",
         "doc",
         "numero documento",
     },
     "customerName": {
         "cliente",
+        "nome cliente",
+        "sacado",
+        "devedor",
+        "nome",
         "razao social",
         "empresa",
         "subdealer/cliente",
@@ -104,13 +119,18 @@ HEADER_ALIASES: dict[str, set[str]] = {
     },
     "customerCode": {
         "codigo",
+        "cod",
+        "cod sacado",
         "cod cliente",
         "codigo cliente",
         "id cliente",
         "id documento",
     },
     "installmentValue": {
+        "valor",
+        "vl",
         "valor parcela",
+        "valor da parcela",
         "valor parcelar",
         "vlr parcela",
         "valor titulo",
@@ -246,7 +266,13 @@ def parse_receivable_worksheet(
                 header_signature = detected["signature"]
                 column_map = detected["columns"]
                 continue
-            continue
+            inferred = infer_headerless_column_map(row_values)
+            if inferred:
+                receivable_section_detected = True
+                header_signature = "headerless_auto_v1"
+                column_map = inferred
+            else:
+                continue
 
         if is_totals_row(row_values):
             continue
@@ -282,6 +308,77 @@ def parse_receivable_worksheet(
         header_signature=header_signature,
         detected_columns=sorted(column_map.keys()),
     )
+
+
+def infer_headerless_column_map(row_values: list[object]) -> dict[str, int] | None:
+    date_idx: int | None = None
+    amount_candidates: list[int] = []
+    customer_candidates: list[tuple[int, int]] = []
+    document_idx: int | None = None
+    status_idx: int | None = None
+
+    for idx, value in enumerate(row_values, start=1):
+        text = clean_text(value)
+        if not text:
+            continue
+
+        as_date = to_iso_date(value)
+        if as_date and date_idx is None:
+            date_idx = idx
+
+        cents = parse_money_to_cents(value)
+        if cents is not None and as_date is None:
+            amount_candidates.append(idx)
+
+        if document_idx is None and NF_RE.search(text):
+            document_idx = idx
+
+        lowered = text.lower()
+        if status_idx is None and ("venc" in lowered or lowered in {"a vencer", "vencido"}):
+            status_idx = idx
+
+        if is_probable_customer_text(text, as_date is not None, cents is not None):
+            customer_candidates.append((idx, len(text)))
+
+    if not amount_candidates or not customer_candidates:
+        return None
+
+    amount_idx = next((idx for idx in amount_candidates if idx != date_idx), amount_candidates[0])
+    customer_idx = None
+    for idx, _ in sorted(customer_candidates, key=lambda item: item[1], reverse=True):
+        if idx not in {date_idx, amount_idx}:
+            customer_idx = idx
+            break
+    if customer_idx is None:
+        return None
+
+    mapped: dict[str, int] = {
+        "customerName": customer_idx,
+        "installmentValue": amount_idx,
+        "balance": amount_idx,
+    }
+    if date_idx is not None:
+        mapped["dueDate"] = date_idx
+    if document_idx is not None and document_idx not in {date_idx, customer_idx, amount_idx}:
+        mapped["documentRef"] = document_idx
+    if status_idx is not None and status_idx not in {date_idx, customer_idx, amount_idx}:
+        mapped["status"] = status_idx
+    return mapped
+
+
+def is_probable_customer_text(text: str, is_date: bool, is_numeric_money: bool) -> bool:
+    if is_date or is_numeric_money:
+        return False
+    if len(text) < 3:
+        return False
+    if not any(ch.isalpha() for ch in text):
+        return False
+    if NF_RE.search(text):
+        return False
+    normalized = text.strip()
+    if re.fullmatch(r"[\d\s./-]+", normalized):
+        return False
+    return True
 
 
 def parse_receivable_row(
@@ -323,10 +420,13 @@ def parse_receivable_row(
         return None
 
     due_date = to_iso_date(value_at(row_values, column_map.get("dueDate")))
+    issue_date = to_iso_date(value_at(row_values, column_map.get("issueDate")))
+    if not due_date and issue_date:
+        due_date = issue_date
     if not due_date:
-        return None
-
-    issue_date = to_iso_date(value_at(row_values, column_map.get("issueDate"))) or due_date
+        due_date = date.today().isoformat()
+    if not issue_date:
+        issue_date = due_date
     balance_cents = parse_money_to_cents(value_at(row_values, column_map.get("balance")))
     installment_value_cents = parse_money_to_cents(value_at(row_values, column_map.get("installmentValue")))
     if balance_cents is None and installment_value_cents is None:
@@ -387,8 +487,8 @@ def detect_receivables_header_row(row_values: list[object]) -> dict[str, object]
                 mapped[field] = idx
                 break
 
-    # Aceita layout minimo (vencimento + cliente + saldo), cobrindo planilhas simples.
-    required = {"dueDate", "customerName"}
+    # Aceita layout minimo (cliente + valor), com vencimento opcional.
+    required = {"customerName"}
     has_amount = "balance" in mapped or "installmentValue" in mapped
     if required.issubset(mapped.keys()) and has_amount:
         signature = "|".join([header for header in normalized_headers if header])
@@ -492,6 +592,15 @@ def to_iso_date(value: object) -> str | None:
         return value.date().isoformat()
     if isinstance(value, date):
         return value.isoformat()
+    if isinstance(value, (int, float, Decimal)) and not isinstance(value, bool):
+        # Excel serial date compatibility (works for arquivos lidos via pandas/openpyxl).
+        try:
+            serial = float(value)
+            if 20000 <= serial <= 60000:
+                base = datetime(1899, 12, 30)
+                return (base + timedelta(days=serial)).date().isoformat()
+        except (TypeError, ValueError, OverflowError):
+            return None
 
     text = clean_text(value)
     if not text:

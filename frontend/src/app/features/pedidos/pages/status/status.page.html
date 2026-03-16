@@ -1,0 +1,737 @@
+@if (loading()) {
+  <section class="card state">
+    <p>Carregando sessão Status...</p>
+  </section>
+} @else {
+  <section class="card intro">
+    <h2>Status de Aprovação Digital</h2>
+    <p>Fluxo unificado de pedidos: encaminhamento, assinatura da Isabel, negativas de limite e distribuição das vias.</p>
+  </section>
+
+  <section class="summary-grid">
+    <article class="card summary-card">
+      <p>Total</p>
+      <strong>{{ summary().total }}</strong>
+    </article>
+    <article class="card summary-card">
+      <p>Pendentes assinatura</p>
+      <strong>{{ summary().pendingSignature }}</strong>
+    </article>
+    <article class="card summary-card">
+      <p>Negados sem limite</p>
+      <strong>{{ summary().negativeNoLimit }}</strong>
+    </article>
+    <article class="card summary-card">
+      <p>Devolvidos revisão</p>
+      <strong>{{ summary().returnedForReview }}</strong>
+    </article>
+    <article class="card summary-card">
+      <p>Assinados hoje</p>
+      <strong>{{ summary().signedToday }}</strong>
+    </article>
+    <article class="card summary-card">
+      <p>Concluídos</p>
+      <strong>{{ summary().done }}</strong>
+    </article>
+    <article class="card summary-card">
+      <p>Faturados</p>
+      <strong>{{ summary().billed }}</strong>
+    </article>
+  </section>
+
+  <section class="card filters">
+    <form [formGroup]="filtersForm">
+      <div class="grid">
+        <label>
+          Status
+          <select formControlName="status">
+            <option value="">Todos</option>
+            <option value="AGUARDANDO_ASSINATURA_ISABEL">Aguardando assinatura</option>
+            <option value="NEGADO_SEM_LIMITE">Negado sem limite</option>
+            <option value="DEVOLVIDO_REVISAO">Devolvido revisão</option>
+            <option value="ASSINADO_AGUARDANDO_DISTRIBUICAO">Assinado distribuindo</option>
+            <option value="CONCLUIDO">Concluído</option>
+            <option value="FATURADO">Faturado</option>
+          </select>
+        </label>
+        <label>
+          Cliente
+          <input type="text" formControlName="customer" placeholder="Filtrar por nome" />
+        </label>
+        <label>
+          De
+          <input type="date" formControlName="dateFrom" />
+        </label>
+        <label>
+          Até
+          <input type="date" formControlName="dateTo" />
+        </label>
+      </div>
+      <div class="actions">
+        <button type="button" class="ghost" (click)="clearFilters()">Limpar filtros</button>
+        <button type="button" (click)="applyFilters()">Aplicar filtros</button>
+      </div>
+    </form>
+  </section>
+
+  @if (errorMessage()) {
+    <section class="card state state-error">
+      <p>{{ errorMessage() }}</p>
+    </section>
+  }
+  @if (toastMessage()) {
+    <section class="card state state-success">
+      <p>{{ toastMessage() }}</p>
+    </section>
+  }
+
+  <section class="tabs">
+    <button type="button" [class.active]="tab() === 'pendentes'" (click)="changeTab('pendentes')">
+      Pendentes ({{ pendingItems().length }})
+    </button>
+    <button type="button" [class.active]="tab() === 'historico'" (click)="changeTab('historico')">
+      Concluídos ({{ historyItems().length }})
+    </button>
+    <button type="button" [class.active]="tab() === 'negados'" (click)="changeTab('negados')">
+      Negados ({{ negativeItems().length }})
+    </button>
+    <button type="button" [class.active]="tab() === 'faturados'" (click)="changeTab('faturados')">
+      Faturados ({{ billedItems().length }})
+    </button>
+    @if (isAdmin()) {
+      <button type="button" [class.active]="tab() === 'importacoes'" (click)="changeTab('importacoes')">
+        Importações ({{ importHistoryItems().length }})
+      </button>
+      <button type="button" [class.active]="tab() === 'config'" (click)="changeTab('config')">
+        Configuração
+      </button>
+    }
+  </section>
+
+  @if (tab() === 'pendentes') {
+    <section class="card table-card">
+      <table>
+        <thead>
+          <tr>
+            <th>Pedido</th>
+            <th>Cliente</th>
+            <th>Valor</th>
+            <th>Consultor</th>
+            <th>Status</th>
+            <th>Ações</th>
+          </tr>
+        </thead>
+        <tbody>
+          @if (pendingItems().length === 0) {
+            <tr><td colspan="6">Nenhum pedido pendente.</td></tr>
+          } @else {
+            @for (item of pendingItems(); track item.id) {
+              <tr>
+                <td>{{ item.orderNumber }}</td>
+                <td>{{ item.customerName }}</td>
+                <td>{{ item.orderValue | currency: 'BRL' }}</td>
+                <td>{{ item.consultantName || '-' }}</td>
+                <td>{{ item.status }}</td>
+                <td>
+                  <div class="row-actions">
+                    <button type="button" (click)="openDecisionModal(item)">
+                      {{ isIsabel() ? 'Assinar / Devolver' : 'Visualizar' }}
+                    </button>
+                    @if (canDelete(item)) {
+                      <button
+                        type="button"
+                        class="icon-button trash"
+                        [disabled]="actionLoading()"
+                        title="Excluir solicitação"
+                        aria-label="Excluir solicitação"
+                        (click)="deleteOrder(item)"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path
+                            d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"
+                            fill="currentColor"
+                          />
+                        </svg>
+                      </button>
+                    }
+                  </div>
+                </td>
+              </tr>
+            }
+          }
+        </tbody>
+      </table>
+    </section>
+  }
+
+  @if (tab() === 'historico') {
+    <section class="card table-card">
+      <table>
+        <thead>
+          <tr>
+            <th>Pedido</th>
+            <th>Cliente</th>
+            <th>Status</th>
+            <th>Assinado em</th>
+            <th>Atualizado</th>
+            <th>Ações</th>
+          </tr>
+        </thead>
+        <tbody>
+          @if (historyItems().length === 0) {
+            <tr><td colspan="6">Sem pedidos concluídos para os filtros atuais.</td></tr>
+          } @else {
+            @for (item of historyItems(); track item.id) {
+              <tr>
+                <td>{{ item.orderNumber }}</td>
+                <td>{{ item.customerName }}</td>
+                <td>{{ item.status }}</td>
+                <td>{{ item.signedAt ? (item.signedAt | date: 'short') : '-' }}</td>
+                <td>{{ item.updatedAt | date: 'short' }}</td>
+                <td>
+                  <div class="row-actions">
+                    <button type="button" class="ghost" (click)="openDecisionModal(item)">Detalhes</button>
+                    <button type="button" (click)="downloadOrder(item)">Download</button>
+                    @if (canMarkAsBilled(item)) {
+                      <button type="button" class="success" (click)="markAsBilled(item)">Dar baixa (Faturado)</button>
+                    }
+                    @if (canDelete(item)) {
+                      <button
+                        type="button"
+                        class="icon-button trash"
+                        [disabled]="actionLoading()"
+                        title="Excluir solicitação"
+                        aria-label="Excluir solicitação"
+                        (click)="deleteOrder(item)"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path
+                            d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"
+                            fill="currentColor"
+                          />
+                        </svg>
+                      </button>
+                    }
+                  </div>
+                </td>
+              </tr>
+            }
+          }
+        </tbody>
+      </table>
+    </section>
+  }
+
+  @if (tab() === 'negados') {
+    <section class="card table-card">
+      <table>
+        <thead>
+          <tr>
+            <th>Pedido</th>
+            <th>Cliente</th>
+            <th>Valor</th>
+            <th>Excesso</th>
+            <th>Motivo</th>
+            <th>Ações</th>
+          </tr>
+        </thead>
+        <tbody>
+          @if (negativeItems().length === 0) {
+            <tr><td colspan="6">Nenhum pedido negado sem limite.</td></tr>
+          } @else {
+            @for (item of negativeItems(); track item.id) {
+              <tr>
+                <td>{{ item.orderNumber }}</td>
+                <td>{{ item.customerName }}</td>
+                <td>{{ item.orderValue | currency: 'BRL' }}</td>
+                <td>{{ item.overLimit | currency: 'BRL' }}</td>
+                <td>{{ item.statusReason || 'Sem motivo registrado' }}</td>
+                <td>
+                  <div class="row-actions">
+                    <button type="button" class="ghost" (click)="openDecisionModal(item)">Detalhes</button>
+                    <button type="button" (click)="downloadOrder(item)">PDF</button>
+                    @if (canDelete(item)) {
+                      <button
+                        type="button"
+                        class="icon-button trash"
+                        [disabled]="actionLoading()"
+                        title="Excluir solicitação"
+                        aria-label="Excluir solicitação"
+                        (click)="deleteOrder(item)"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path
+                            d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"
+                            fill="currentColor"
+                          />
+                        </svg>
+                      </button>
+                    }
+                  </div>
+                </td>
+              </tr>
+            }
+          }
+        </tbody>
+      </table>
+    </section>
+  }
+
+  @if (tab() === 'faturados') {
+    <section class="card table-card">
+      <table>
+        <thead>
+          <tr>
+            <th>Pedido</th>
+            <th>Cliente</th>
+            <th>Responsável pela assinatura</th>
+            <th>Atualizado</th>
+            <th>Ações</th>
+          </tr>
+        </thead>
+        <tbody>
+          @if (billedItems().length === 0) {
+            <tr><td colspan="5">Nenhum pedido faturado.</td></tr>
+          } @else {
+            @for (item of billedItems(); track item.id) {
+              <tr>
+                <td>{{ item.orderNumber }}</td>
+                <td>{{ item.customerName }}</td>
+                <td>{{ item.signedByName || '-' }}</td>
+                <td>{{ item.updatedAt | date: 'short' }}</td>
+                <td>
+                  <div class="row-actions">
+                    <button type="button" class="ghost" (click)="openDecisionModal(item)">Detalhes</button>
+                    <button type="button" (click)="downloadOrder(item)">Download</button>
+                    @if (canDelete(item)) {
+                      <button
+                        type="button"
+                        class="icon-button trash"
+                        [disabled]="actionLoading()"
+                        title="Excluir solicitação"
+                        aria-label="Excluir solicitação"
+                        (click)="deleteOrder(item)"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path
+                            d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"
+                            fill="currentColor"
+                          />
+                        </svg>
+                      </button>
+                    }
+                  </div>
+                </td>
+              </tr>
+            }
+          }
+        </tbody>
+      </table>
+    </section>
+  }
+
+  @if (tab() === 'importacoes') {
+    @if (!isAdmin()) {
+      <section class="card state state-error">
+        <p>Acesso de importações permitido apenas para Marcos e Isabel.</p>
+      </section>
+    } @else {
+      <section class="card table-card">
+        <div class="import-toolbar">
+          <div>
+            <h3>Histórico de importações</h3>
+            <p>Registro automático por login autenticado, com arquivos e resultados da ingestão.</p>
+          </div>
+          <button type="button" class="ghost" [disabled]="importHistoryLoading()" (click)="refreshImportHistory()">
+            @if (importHistoryLoading()) {
+              Atualizando...
+            } @else {
+              Atualizar histórico
+            }
+          </button>
+        </div>
+
+        @if (importHistoryError()) {
+          <p class="inline-error">{{ importHistoryError() }}</p>
+        }
+
+        @if (latestSpreadsheetImport(); as latest) {
+          <article class="latest-spreadsheet">
+            <p class="kicker">Última planilha importada</p>
+            <strong>{{ latest.file.fileName }}</strong>
+            <p>
+              Importada por <strong>{{ latest.item.actorUsername }}</strong> em
+              <strong>{{ latest.processedAt | date: 'short' }}</strong>
+            </p>
+          </article>
+        } @else {
+          <article class="latest-spreadsheet latest-spreadsheet-empty">
+            <p>Nenhuma planilha importada foi registrada até o momento.</p>
+          </article>
+        }
+
+        <table>
+          <thead>
+            <tr>
+              <th>Protocolo</th>
+              <th>Usuário</th>
+              <th>Modo</th>
+              <th>Status</th>
+              <th>Arquivos</th>
+              <th>Resultado</th>
+              <th>Finalizado em</th>
+            </tr>
+          </thead>
+          <tbody>
+            @if (importHistoryItems().length === 0) {
+              <tr><td colspan="7">Sem histórico de importação.</td></tr>
+            } @else {
+              @for (item of importHistoryItems(); track item.id) {
+                <tr>
+                  <td>{{ item.operationId }}</td>
+                  <td>{{ item.actorUsername }}</td>
+                  <td>{{ importModeLabel(item.mode) }}</td>
+                  <td>{{ importStatusLabel(item.status) }}</td>
+                  <td>
+                    @if (item.files.length === 0) {
+                      <span>Sem arquivo</span>
+                    } @else {
+                      <ul class="import-files">
+                        @for (file of item.files; track file.id) {
+                          <li>
+                            {{ importFileLabel(file) }}: {{ file.fileName }}
+                            @if (file.recordCount > 0) {
+                              ({{ file.recordCount }} registros)
+                            }
+                          </li>
+                        }
+                      </ul>
+                    }
+                  </td>
+                  <td>{{ importAuditSummary(item) }}</td>
+                  <td>{{ (item.completedAt || item.createdAt) | date: 'short' }}</td>
+                </tr>
+              }
+            }
+          </tbody>
+        </table>
+      </section>
+    }
+  }
+
+  @if (tab() === 'config') {
+    @if (!isAdmin()) {
+      <section class="card state state-error">
+        <p>Acesso de configuração permitido apenas para Marcos e Isabel.</p>
+      </section>
+    } @else if (loadingConfig()) {
+      <section class="card state">
+        <p>Carregando configuração de destinatários...</p>
+      </section>
+    } @else {
+      <section class="card config-card">
+        <h3>Destinatários fixos de distribuição</h3>
+        <p>Informe múltiplos e-mails separados por vírgula.</p>
+        <form [formGroup]="configForm" (ngSubmit)="saveConfig()">
+          <div class="grid">
+            <label>
+              Isabel (assinatura e via 4)
+              <input type="text" formControlName="isabelEmails" />
+            </label>
+            <label>
+              Vítor (vias 1 e 2)
+              <input type="text" formControlName="vitorEmails" />
+            </label>
+            <label>
+              Marcos (via 3)
+              <input type="text" formControlName="marcosEmails" />
+            </label>
+          </div>
+          <div class="actions">
+            <button type="submit" [disabled]="savingConfig()">
+              @if (savingConfig()) {
+                Salvando...
+              } @else {
+                Salvar destinatários
+              }
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section class="card config-card">
+        <h3>E-mails dos administradores</h3>
+        <p>Via 3 também é enviada automaticamente ao administrador que iniciou o pedido.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Administrador</th>
+              <th>Usuário</th>
+              <th>E-mail</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (admin of adminEmails(); track admin.id) {
+              <tr>
+                <td>{{ admin.name }}</td>
+                <td>{{ admin.username }}</td>
+                <td>
+                  <input
+                    type="email"
+                    [ngModel]="adminDraftEmail()[admin.id] || ''"
+                    (ngModelChange)="setAdminDraftEmail(admin.id, $event)"
+                    [ngModelOptions]="{ standalone: true }"
+                  />
+                </td>
+                <td>
+                  <button type="button" (click)="saveAdminEmail(admin)">Salvar</button>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </section>
+    }
+  }
+}
+
+@if (decisionModalOpen() && selectedOrder(); as order) {
+  <section class="modal-backdrop">
+    <article class="modal card">
+      <header>
+        <h3>{{ order.orderNumber }} - {{ order.customerName }}</h3>
+        <button type="button" class="ghost" (click)="closeDecisionModal()">Fechar</button>
+      </header>
+
+      <div class="modal-grid">
+        <section class="pdf-pane">
+          <div class="pdf-pane-header">
+            <p class="label">Documentos do fluxo</p>
+            <div class="preview-tabs">
+              <button
+                type="button"
+                class="ghost"
+                [class.active]="previewTab() === 'pedido'"
+                (click)="setPreviewTab('pedido')"
+              >
+                Pedido
+              </button>
+              <button
+                type="button"
+                class="ghost"
+                [class.active]="previewTab() === 'analise'"
+                (click)="setPreviewTab('analise')"
+              >
+                Saúde financeira
+              </button>
+            </div>
+          </div>
+
+          @if (previewTab() === 'pedido') {
+            @if (previewLoading()) {
+              <p>Carregando PDF do pedido...</p>
+            } @else if (!previewUrl()) {
+              <p>Pré-visualização do pedido indisponível.</p>
+            } @else {
+              <iframe [src]="previewUrl()" title="PDF do pedido"></iframe>
+            }
+          } @else {
+            @if (analysisPreviewLoading()) {
+              <p>Carregando PDF de saúde financeira...</p>
+            } @else if (!analysisPreviewUrl()) {
+              <p>PDF de saúde financeira indisponível para este pedido.</p>
+            } @else {
+              <iframe [src]="analysisPreviewUrl()" title="PDF de saúde financeira"></iframe>
+            }
+          }
+
+          <div class="actions preview-actions">
+            <button type="button" class="ghost" (click)="downloadOrder(order)">Baixar PDF do pedido</button>
+            <button type="button" class="ghost" (click)="downloadOrderAnalysis(order)">
+              Baixar PDF de saúde financeira
+            </button>
+          </div>
+        </section>
+
+        <section class="decision-pane">
+          <div class="status-block">
+            <p><strong>Status:</strong> {{ order.status }}</p>
+            <p><strong>Valor:</strong> {{ order.orderValue | currency: 'BRL' }}</p>
+            <p><strong>Saldo aberto:</strong> {{ order.openBalance | currency: 'BRL' }}</p>
+            <p><strong>Limite:</strong> {{ order.creditLimit | currency: 'BRL' }}</p>
+            <p><strong>Excesso:</strong> {{ order.overLimit | currency: 'BRL' }}</p>
+            @if (order.signedByName || order.signedAt) {
+              <p><strong>Assinado por:</strong> {{ order.signedByName || '-' }}</p>
+              <p><strong>Assinado em:</strong> {{ order.signedAt ? (order.signedAt | date: 'short') : '-' }}</p>
+            }
+            @if (order.statusReason) {
+              <p><strong>Motivo:</strong> {{ order.statusReason }}</p>
+            }
+          </div>
+
+          <section class="audit-block">
+            <h4>Governança do processo</h4>
+            @if (auditLoading()) {
+              <p>Carregando trilha de auditoria...</p>
+            } @else if (decisionEvents().length === 0) {
+              <p>Sem eventos registrados para este pedido.</p>
+            } @else {
+              <ul class="event-list">
+                @for (event of decisionEvents(); track $index) {
+                  <li>
+                    <p>
+                      <strong>{{ event.eventType }}</strong>
+                      em {{ event.createdAt | date: 'short' }}
+                    </p>
+                    <p>
+                      por {{ event.actorName || 'Sistema' }}
+                      @if (event.message) {
+                        - {{ event.message }}
+                      }
+                    </p>
+                  </li>
+                }
+              </ul>
+            }
+          </section>
+
+          @if (isStatusOperator() && order.status === 'AGUARDANDO_ASSINATURA_ISABEL') {
+            <section class="signature-block">
+              <h4>Assinatura digital</h4>
+              <p>Modo ativo: <strong>{{ signatureMode().toUpperCase() }}</strong></p>
+
+              @if (signatureMode() === 'canvas') {
+                <div class="signature-box">
+                  <canvas
+                    #signaturePad
+                    width="520"
+                    height="140"
+                    (pointerdown)="onSignaturePointerDown($event)"
+                    (pointermove)="onSignaturePointerMove($event)"
+                    (pointerup)="onSignaturePointerUp($event)"
+                    (pointerleave)="onSignaturePointerUp($event)"
+                  ></canvas>
+                </div>
+                <p class="signature-storage-status">
+                  @if (hasSavedSignature()) {
+                    Assinatura salva disponível neste navegador.
+                  } @else {
+                    Nenhuma assinatura salva neste navegador.
+                  }
+                </p>
+                <div class="actions signature-actions">
+                  <button type="button" class="ghost" (click)="clearSignature()">Limpar assinatura</button>
+                  <button type="button" class="ghost" [disabled]="!hasSignature()" (click)="saveCurrentSignature()">
+                    Salvar assinatura
+                  </button>
+                  <button type="button" class="ghost" [disabled]="!hasSavedSignature()" (click)="loadSavedSignature()">
+                    Usar assinatura salva
+                  </button>
+                  <button type="button" class="ghost danger-ghost" [disabled]="!hasSavedSignature()" (click)="deleteSavedSignature()">
+                    Remover assinatura salva
+                  </button>
+                </div>
+              } @else {
+                <p>A assinatura será registrada por hash criptográfico com trilha auditável.</p>
+              }
+            </section>
+
+            <section class="return-block" [formGroup]="returnForm">
+              <label>
+                Justificativa de devolução
+                <textarea formControlName="reason" rows="4"></textarea>
+              </label>
+            </section>
+
+            <div class="actions">
+              @if (isIsabel()) {
+                <button type="button" class="warn" (click)="returnSelectedOrder()" [disabled]="actionLoading()">
+                  Devolver para revisão
+                </button>
+              }
+              <button type="button" (click)="signSelectedOrder()" [disabled]="actionLoading()">
+                @if (actionLoading()) {
+                  Processando...
+                } @else {
+                  Baixar PDF assinado e concluir pedido
+                }
+              </button>
+            </div>
+          } @else {
+            @if (isSignatureFrozen(order)) {
+              <section class="signature-block signature-readonly">
+                <h4>Assinatura registrada (somente leitura)</h4>
+                <p>
+                  Responsável: <strong>{{ order.signedByName || '-' }}</strong>
+                  @if (order.signedAt) {
+                    em <strong>{{ order.signedAt | date: 'short' }}</strong>
+                  }
+                </p>
+
+                @if (orderSignatureLoading()) {
+                  <p>Carregando assinatura registrada...</p>
+                } @else if (orderSignatureUrl()) {
+                  <div class="signature-frozen-box">
+                    <img [src]="orderSignatureUrl()" alt="Assinatura registrada do responsável" />
+                  </div>
+                } @else {
+                  <p>Assinatura manual indisponível. Consulte o PDF assinado como documento oficial.</p>
+                }
+              </section>
+            } @else {
+              <section class="signature-block">
+                <h4>Assinatura manual (caneta virtual)</h4>
+                <p>Desenhe a assinatura com o mouse para gerar um PDF assinado pela pessoa logada.</p>
+                @if (order.status === 'AGUARDANDO_ASSINATURA_ISABEL' && !isIsabel()) {
+                  <p class="inline-warning">
+                    Conclusão final do pedido é feita com o login da Isabel para manter a governança da aprovação.
+                  </p>
+                }
+                <div class="signature-box">
+                  <canvas
+                    #signaturePad
+                    width="520"
+                    height="140"
+                    (pointerdown)="onSignaturePointerDown($event)"
+                    (pointermove)="onSignaturePointerMove($event)"
+                    (pointerup)="onSignaturePointerUp($event)"
+                    (pointerleave)="onSignaturePointerUp($event)"
+                  ></canvas>
+                </div>
+                <p class="signature-storage-status">
+                  @if (hasSavedSignature()) {
+                    Assinatura salva disponível neste navegador.
+                  } @else {
+                    Nenhuma assinatura salva neste navegador.
+                  }
+                </p>
+                <div class="actions signature-actions">
+                  <button type="button" class="ghost" (click)="clearSignature()">Limpar assinatura</button>
+                  <button type="button" class="ghost" [disabled]="!hasSignature()" (click)="saveCurrentSignature()">
+                    Salvar assinatura
+                  </button>
+                  <button type="button" class="ghost" [disabled]="!hasSavedSignature()" (click)="loadSavedSignature()">
+                    Usar assinatura salva
+                  </button>
+                  <button type="button" class="ghost danger-ghost" [disabled]="!hasSavedSignature()" (click)="deleteSavedSignature()">
+                    Remover assinatura salva
+                  </button>
+                </div>
+              </section>
+            }
+
+            <div class="actions">
+              <button type="button" (click)="downloadOrder(order)">Download PDF</button>
+              @if (canMarkAsBilled(order)) {
+                <button type="button" class="success" [disabled]="actionLoading()" (click)="markAsBilled(order)">
+                  Dar baixa (Faturado)
+                </button>
+              }
+            </div>
+          }
+        </section>
+      </div>
+    </article>
+  </section>
+}
