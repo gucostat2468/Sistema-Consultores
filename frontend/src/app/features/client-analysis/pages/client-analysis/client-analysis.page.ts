@@ -196,11 +196,12 @@ export class ClientAnalysisPage {
     });
     const limitTotal = metrics.limit;
     const available = metrics.available;
-    const used = credit?.creditUsed ?? Math.max(limitTotal - available, 0);
+    const usedFromLimit = limitTotal > 0 ? Math.max(limitTotal - available, 0) : 0;
+    const used = Math.max(Number(credit?.creditUsed) || 0, usedFromLimit);
     const debtTotal = summary.total;
     const debtOverdue = summary.overdue;
     const debtFuture = Math.max(debtTotal - debtOverdue, 0);
-    const gap = Math.max(debtTotal - available, 0);
+    const gap = limitTotal > 0 ? Math.max(debtTotal - limitTotal, 0) : Math.max(debtTotal - available, 0);
     const debtToLimitRatio = metrics.debtToLimitRatio;
     const debtToAvailableRatio = available > 0 ? debtTotal / available : null;
     const coverageRatio = metrics.coverageRatio;
@@ -238,29 +239,39 @@ export class ClientAnalysisPage {
     const availabilityStory =
       panel.available > 0
         ? `Ha ${this.currency(panel.available)} de limite livre para sustentar a operacao.`
-        : 'Nao ha limite livre agora para suportar novos movimentos.';
+        : panel.limitTotal > 0 && panel.debtToLimitRatio <= 1
+          ? 'Sem folga imediata no cadastro, mas a divida permanece dentro do limite contratado.'
+          : 'Nao ha limite livre agora para suportar novos movimentos.';
 
     const needStory =
       panel.gap > 0
-        ? `Faltam ${this.currency(panel.gap)} para cobrir toda a divida atual.`
+        ? `Faltam ${this.currency(panel.gap)} para cobrir a parte da divida acima do limite total.`
+        : panel.limitTotal > 0 && panel.available <= 0
+          ? 'Sem limite livre no momento, mas sem excesso sobre o limite total.'
         : 'O limite disponivel ja cobre 100% da divida atual.';
 
-    const pressure = panel.debtTotal > 0 ? (panel.debtOverdue + panel.due7) / panel.debtTotal : 0;
+    const overdueRatio = panel.debtTotal > 0 ? panel.debtOverdue / panel.debtTotal : 0;
+    const shortTermPressure = panel.debtTotal > 0 ? (panel.debtOverdue + panel.due7) / panel.debtTotal : 0;
     let priorityLabel: CreditOnboarding['priorityLabel'] = 'Ok';
     let priorityClass: CreditOnboarding['priorityClass'] = 'guide-priority-ok';
-    let actionStory = 'Cenario controlado para continuidade das propostas com monitoramento padrao.';
+    let actionStory =
+      'Cenario saudavel para continuidade das propostas, mantendo monitoramento padrao de vencimentos.';
 
     if (
-      panel.gap > 0 ||
-      panel.debtToLimitRatio >= 0.9 ||
-      (panel.debtToAvailableRatio !== null && panel.debtToAvailableRatio > 1) ||
-      pressure >= 0.35
+      panel.debtToLimitRatio >= 0.95 ||
+      shortTermPressure >= 0.45 ||
+      (panel.available <= 0 && panel.debtToLimitRatio >= 0.9) ||
+      overdueRatio >= 0.02
     ) {
       priorityLabel = 'Atencao';
       priorityClass = 'guide-priority-attention';
-      actionStory = 'Segurar novas condicoes agressivas e acompanhar recebimentos de curto prazo.';
+      actionStory = 'Acompanhar recebimentos de curto prazo e evitar ampliar exposicao sem previsao de caixa.';
     }
-    if (panel.debtOverdue > 0 || panel.alert === 'Acima do limite' || panel.debtToLimitRatio > 1.02) {
+    if (
+      panel.alert === 'Acima do limite' ||
+      panel.debtToLimitRatio > 1.02 ||
+      overdueRatio >= 0.15
+    ) {
       priorityLabel = 'Critica';
       priorityClass = 'guide-priority-critical';
       actionStory = 'Priorizar cobranca/renegociacao antes de ampliar limite ou nova proposta comercial.';
@@ -430,15 +441,21 @@ export class ClientAnalysisPage {
     return 'Sem dados';
   }
 
-  creditNeedLabel(gap: number): string {
-    if (gap <= 0) {
+  creditNeedLabel(panel: CreditDebtSnapshot): string {
+    if (panel.gap <= 0) {
+      if (panel.available <= 0 && panel.limitTotal > 0) {
+        return 'Sem folga imediata, mas dentro do limite total contratado.';
+      }
       return 'Sem necessidade adicional de limite.';
     }
-    return 'Necessidade para cobrir 100% da divida atual.';
+    return 'Necessidade para cobrir somente a parcela acima do limite.';
   }
 
   debtToAvailableLabel(panel: CreditDebtSnapshot): string {
     if (panel.debtToAvailableRatio === null) {
+      if (panel.limitTotal > 0 && panel.debtToLimitRatio <= 1) {
+        return 'Sem folga imediata';
+      }
       return panel.debtTotal > 0 ? 'Sem limite livre' : 'Sem exposicao';
     }
     return this.percent(panel.debtToAvailableRatio);
@@ -446,6 +463,9 @@ export class ClientAnalysisPage {
 
   debtToAvailableHint(panel: CreditDebtSnapshot): string {
     if (panel.debtToAvailableRatio === null) {
+      if (panel.limitTotal > 0 && panel.debtToLimitRatio <= 1) {
+        return `${this.currency(panel.debtTotal)} cobertos por limite total de ${this.currency(panel.limitTotal)}`;
+      }
       return `${this.currency(panel.debtTotal)} sobre ${this.currency(panel.available)} (sem folga no momento)`;
     }
     return `${this.currency(panel.debtTotal)} sobre ${this.currency(panel.available)}`;
@@ -629,19 +649,24 @@ export class ClientAnalysisPage {
     overdue: number,
     limitTotal: number
   ): CreditAlert {
+    const debtToLimitRatio = limitTotal > 0 ? totalDebt / limitTotal : 9.99;
+
     if (totalDebt <= 0) {
       return 'Sem exposicao';
     }
     if (limitTotal <= 0 && available <= 0) {
       return 'Sem limite livre';
     }
-    if (limitTotal > 0 && totalDebt > limitTotal) {
+    if (limitTotal > 0 && debtToLimitRatio > 1.03) {
       return 'Acima do limite';
     }
-    if (available <= 0) {
+    if (overdue > 0) {
       return 'Atencao';
     }
-    if ((limitTotal > 0 && totalDebt >= limitTotal * 0.85) || overdue > 0) {
+    if (available <= 0) {
+      return debtToLimitRatio >= 0.98 ? 'Atencao' : 'Controlado';
+    }
+    if (limitTotal > 0 && debtToLimitRatio >= 0.9) {
       return 'Atencao';
     }
     return 'Controlado';

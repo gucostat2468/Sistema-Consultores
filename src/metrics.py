@@ -226,7 +226,13 @@ def classify_financial_status(
 ) -> str:
     if risk_score < 45 or overdue_ratio >= 0.22 or severe_overdue_ratio >= 0.12:
         return "Crítico"
-    if risk_score < 72 or overdue_ratio >= 0.08 or due_15_ratio >= 0.38:
+    if overdue_ratio >= 0.10:
+        return "Atenção"
+    if due_15_ratio >= 0.55 and overdue_ratio >= 0.02:
+        return "Atenção"
+    if risk_score < 70:
+        return "Atenção"
+    if due_15_ratio >= 0.70 and risk_score < 82:
         return "Atenção"
     return "Saudável"
 

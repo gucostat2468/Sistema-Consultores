@@ -735,8 +735,30 @@ def build_client_health_for_api(
             due_15_ratio=due_15_ratio,
             credit_snapshot=credit_lookup.get(credit_key),
         )
+        has_limit = bool(credit_eval["hasLimit"])
+        coverage_ratio = float(credit_eval["coverageRatio"])
+        debt_to_limit_ratio = float(credit_eval["debtToLimitRatio"])
+        credit_available_cents = int(credit_eval["creditAvailableCents"])
         raw_score = 100.0 - base_penalty - escalation_penalty - float(credit_eval["penalty"])
+        positive_bonus = 0.0
+        if has_limit and total_balance_cents > 0:
+            if overdue_ratio <= 0.01:
+                positive_bonus += 3.5
+            if severe_overdue_ratio <= 0.02:
+                positive_bonus += 1.5
+            if debt_to_limit_ratio <= 0.75:
+                positive_bonus += 3.0
+            elif debt_to_limit_ratio <= 0.90:
+                positive_bonus += 1.5
+            if coverage_ratio >= 0.30:
+                positive_bonus += 1.5
+            if due_15_ratio <= 0.35:
+                positive_bonus += 1.0
+        elif not has_limit and overdue_ratio <= 0.01 and due_15_ratio <= 0.20:
+            positive_bonus += 1.0
+
         risk_score = int(round(max(0.0, min(100.0, raw_score))))
+        risk_score = int(round(max(0.0, min(100.0, risk_score + positive_bonus))))
         score_cap = int(credit_eval["maxScoreCap"])
         if score_cap < 100:
             risk_score = min(risk_score, score_cap)
@@ -748,14 +770,12 @@ def build_client_health_for_api(
             severe_overdue_ratio=severe_overdue_ratio,
         )
         mapped_status = map_financial_status(financial_status)
-        has_limit = bool(credit_eval["hasLimit"])
-        coverage_ratio = float(credit_eval["coverageRatio"])
-        debt_to_limit_ratio = float(credit_eval["debtToLimitRatio"])
-        credit_available_cents = int(credit_eval["creditAvailableCents"])
         if not has_limit and total_balance_cents > 0:
             action = "Cliente sem limite cadastrado. Priorizar cadastro/revisao de limite antes de novas propostas."
         elif has_limit and debt_to_limit_ratio > 1.0 and total_balance_cents > 0:
             action = "Exposicao acima do limite de credito. Priorizar revisao de limite e tratativa comercial."
+        elif has_limit and debt_to_limit_ratio <= 0.85 and overdue_ratio <= 0.03 and total_balance_cents > 0:
+            action = "Cliente com limite e baixo risco de atraso. Cenario saudavel para continuidade comercial."
         elif has_limit and credit_available_cents <= 0 and overdue_ratio <= 0.01 and total_balance_cents > 0:
             action = "Limite totalmente utilizado no momento (sem folga), porem sem atraso relevante."
         elif has_limit and credit_available_cents <= 0 and total_balance_cents > 0:
@@ -787,6 +807,7 @@ def build_client_health_for_api(
                     "basePenalty": float(round(base_penalty, 2)),
                     "escalationPenalty": float(round(escalation_penalty, 2)),
                     "creditPenalty": float(round(float(credit_eval["penalty"]), 2)),
+                    "positiveBonus": float(round(positive_bonus, 2)),
                     "hasCreditLimit": has_limit,
                     "creditCoverageRatio": float(round(coverage_ratio, 4)),
                     "debtToLimitRatio": float(round(float(credit_eval["debtToLimitRatio"]), 4)),

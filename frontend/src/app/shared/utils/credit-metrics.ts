@@ -57,12 +57,14 @@ export function evaluateCreditMetrics(args: {
   overdue: number;
   credit: CreditLimitItem | null;
 }): CreditMetrics {
-  const debtOpen = args.debtOpen;
-  const overdue = args.overdue;
-  const limit = args.credit?.creditLimit ?? 0;
-  const available = args.credit?.creditAvailable ?? 0;
+  const debtOpen = Math.max(Number(args.debtOpen) || 0, 0);
+  const overdue = Math.max(Number(args.overdue) || 0, 0);
+  const limit = Math.max(Number(args.credit?.creditLimit) || 0, 0);
+  const rawAvailable = Math.max(Number(args.credit?.creditAvailable) || 0, 0);
+  const inferredAvailable = limit > 0 ? Math.max(limit - debtOpen, 0) : rawAvailable;
+  const available = Math.max(rawAvailable, inferredAvailable);
   const debtToLimitRatio = limit > 0 ? debtOpen / limit : 0;
-  const coverageRatio = debtOpen > 0 ? available / debtOpen : 0;
+  const coverageRatio = debtOpen > 0 ? available / debtOpen : 1;
 
   if (!args.credit) {
     return {
@@ -77,10 +79,11 @@ export function evaluateCreditMetrics(args: {
     };
   }
 
+  const overdueRatio = debtOpen > 0 ? overdue / debtOpen : 0;
   let tone: CreditMetricTone = 'ok';
-  if (debtToLimitRatio > 1 || overdue > 0) {
+  if (debtToLimitRatio > 1.03 || overdueRatio >= 0.25) {
     tone = 'critical';
-  } else if (debtToLimitRatio >= 0.8) {
+  } else if (overdue > 0 || debtToLimitRatio >= 0.9 || (available <= 0 && debtToLimitRatio >= 1.0)) {
     tone = 'attention';
   }
 
@@ -91,7 +94,7 @@ export function evaluateCreditMetrics(args: {
     debtToLimitRatio,
     coverageRatio,
     label: toPercent(coverageRatio),
-    hint: `Div/Lim ${toPercent(debtToLimitRatio)}`,
+    hint: `Div/Lim ${toPercent(debtToLimitRatio)} | Vencido ${toPercent(overdueRatio)}`,
     tone
   };
 }
