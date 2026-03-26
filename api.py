@@ -12,6 +12,7 @@ import json
 import os
 import re
 import secrets
+import sqlite3
 import smtplib
 import ssl
 import tempfile
@@ -104,6 +105,7 @@ ORDER_SIGNED_DIR = ORDER_STORAGE_DIR / "signed"
 ORDER_SIGNATURE_DIR = ORDER_STORAGE_DIR / "signatures"
 ORDER_ANALYSIS_DIR = ORDER_STORAGE_DIR / "analysis"
 ORDER_PACKAGE_DIR = ORDER_STORAGE_DIR / "packages"
+REPORT_BACKUP_DIR = BASE_DIR / "data" / "backups" / "report_updates"
 for _path in [
     ORDER_STORAGE_DIR,
     ORDER_ORIGINAL_DIR,
@@ -111,6 +113,7 @@ for _path in [
     ORDER_SIGNATURE_DIR,
     ORDER_ANALYSIS_DIR,
     ORDER_PACKAGE_DIR,
+    REPORT_BACKUP_DIR,
 ]:
     _path.mkdir(parents=True, exist_ok=True)
 
@@ -337,6 +340,44 @@ def parse_iso_date(value: str | None) -> date | None:
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def create_report_update_backup(*, operation_id: str, actor_username: str) -> dict:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    safe_operation_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(operation_id)).strip("-") or "operation"
+    backup_name = f"{stamp}-{safe_operation_id}.db"
+    backup_path = REPORT_BACKUP_DIR / backup_name
+    metadata_path = backup_path.with_suffix(".json")
+
+    try:
+        with get_connection() as source_conn:
+            with sqlite3.connect(str(backup_path), timeout=30.0) as backup_conn:
+                source_conn.backup(backup_conn)
+        metadata = {
+            "operationId": operation_id,
+            "actorUsername": actor_username,
+            "createdAt": utc_now_iso(),
+            "backupFile": backup_path.name,
+            "backupPath": backup_path.as_posix(),
+        }
+        metadata_path.write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as exc:  # noqa: BLE001
+        backup_path.unlink(missing_ok=True)
+        metadata_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Falha ao criar backup pré-atualização. Atualização cancelada para preservar histórico. Detalhe: {exc}",
+        ) from exc
+
+    return {
+        "fileName": backup_path.name,
+        "filePath": backup_path.as_posix(),
+        "metadataFile": metadata_path.name,
+        "createdAt": utc_now_iso(),
+    }
 
 
 def brl_to_cents(value: float | Decimal | int) -> int:
@@ -2391,6 +2432,12 @@ def admin_import(
         input_profile = "auto"
     operation_id = f"IMP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
     processed_at = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    backup_snapshot: dict | None = None
+    if op_mode == "update":
+        backup_snapshot = create_report_update_backup(
+            operation_id=operation_id,
+            actor_username=user.username,
+        )
     update_policy_message = ""
     if op_mode == "update" and append_mode:
         update_policy_message = (
@@ -2434,6 +2481,10 @@ def admin_import(
         f"Append mode: {'sim' if append_mode else 'nao'}",
         f"Estrito consultores: {'sim' if strict else 'nao'}",
     ]
+    if backup_snapshot:
+        audit_log.append(
+            f"[BACKUP] Snapshot criado antes da atualização: {backup_snapshot.get('filePath')}"
+        )
     if update_policy_message:
         audit_log.append(f"[POLITICA] {update_policy_message}")
 
@@ -2461,6 +2512,7 @@ def admin_import(
             "operationId": operation_id,
             "processedAt": processed_at,
             "ingestionBatchId": batch_id,
+            "backupSnapshot": backup_snapshot,
         }
 
     pdf_report = None

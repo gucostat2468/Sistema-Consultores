@@ -111,6 +111,12 @@
           @if (result.processedAt) {
             <p><strong>Processado em:</strong> {{ result.processedAt }}</p>
           }
+          @if (result.backupSnapshot?.filePath) {
+            <p><strong>Backup pré-atualização:</strong> {{ result.backupSnapshot?.filePath }}</p>
+          }
+          @if (result.backupSnapshot?.createdAt) {
+            <p><strong>Backup criado em:</strong> {{ result.backupSnapshot?.createdAt }}</p>
+          }
         </div>
       }
 

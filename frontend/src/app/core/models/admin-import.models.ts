@@ -43,6 +43,12 @@ export interface AdminImportResponse {
   auditLog?: string[];
   operationId?: string;
   processedAt?: string;
+  backupSnapshot?: {
+    fileName: string;
+    filePath: string;
+    metadataFile: string;
+    createdAt: string;
+  } | null;
 }
 
 export interface IngestionHistoryFile {
