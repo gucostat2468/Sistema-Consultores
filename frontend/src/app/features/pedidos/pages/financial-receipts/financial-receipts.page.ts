@@ -210,13 +210,9 @@ export class FinancialReceiptsPage implements OnDestroy {
   }
 
   formatDateTime(value: string | null | undefined): string {
-    const raw = String(value || '').trim();
-    if (!raw) {
+    const parsed = this.parseAnyDate(value);
+    if (!parsed) {
       return '-';
-    }
-    const parsed = new Date(raw);
-    if (Number.isNaN(parsed.getTime())) {
-      return raw;
     }
     const parts = this.extractFormatterParts(this.dateTimeFormatter, parsed);
     const year = parts['year'] || '0000';
@@ -225,7 +221,7 @@ export class FinancialReceiptsPage implements OnDestroy {
     const hour = parts['hour'] || '00';
     const minute = parts['minute'] || '00';
     const second = parts['second'] || '00';
-    return `${year}-${month}-${day} ${hour}:${minute}:${second} ${HISTORY_TIME_ZONE}`;
+    return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
   }
 
   private load(): void {
@@ -440,5 +436,58 @@ export class FinancialReceiptsPage implements OnDestroy {
       }
       return acc;
     }, {});
+  }
+
+  private parseAnyDate(value: string | null | undefined): Date | null {
+    const raw = String(value || '').trim();
+    if (!raw) {
+      return null;
+    }
+
+    const nativeParsed = new Date(raw);
+    if (!Number.isNaN(nativeParsed.getTime())) {
+      return nativeParsed;
+    }
+
+    const ymdHms = raw.match(
+      /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/
+    );
+    if (ymdHms) {
+      const year = Number(ymdHms[1]);
+      const month = Number(ymdHms[2]) - 1;
+      const day = Number(ymdHms[3]);
+      const hour = Number(ymdHms[4]);
+      const minute = Number(ymdHms[5]);
+      const second = Number(ymdHms[6] || 0);
+      const parsed = new Date(Date.UTC(year, month, day, hour, minute, second));
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed;
+      }
+    }
+
+    const usAmPm = raw.match(
+      /^(\d{1,2})\/(\d{1,2})\/(\d{2,4}),?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)$/i
+    );
+    if (usAmPm) {
+      const month = Number(usAmPm[1]) - 1;
+      const day = Number(usAmPm[2]);
+      let year = Number(usAmPm[3]);
+      if (year < 100) {
+        year += 2000;
+      }
+      let hour = Number(usAmPm[4]) % 12;
+      const minute = Number(usAmPm[5]);
+      const second = Number(usAmPm[6] || 0);
+      const ampm = String(usAmPm[7]).toUpperCase();
+      if (ampm === 'PM') {
+        hour += 12;
+      }
+      const parsed = new Date(year, month, day, hour, minute, second);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed;
+      }
+    }
+
+    return null;
   }
 }
