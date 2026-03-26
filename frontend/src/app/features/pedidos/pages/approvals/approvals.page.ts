@@ -481,7 +481,7 @@ export class ApprovalsPage implements OnDestroy {
   }
 
   private refreshLiveData(): void {
-    if (this.liveRefreshBusy || this.loading() || this.actionLoading()) {
+    if (this.liveRefreshBusy || this.loading() || this.actionLoading() || this.decisionModalOpen()) {
       return;
     }
     if (typeof document !== 'undefined' && document.hidden) {

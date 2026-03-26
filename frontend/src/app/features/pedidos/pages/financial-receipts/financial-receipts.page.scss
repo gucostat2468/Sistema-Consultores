@@ -122,4 +122,54 @@ th {
   .actions button {
     width: 100%;
   }
+
+  table.mobile-stack {
+    min-width: 0;
+    border-collapse: separate;
+    border-spacing: 0 0.55rem;
+  }
+
+  table.mobile-stack thead {
+    display: none;
+  }
+
+  table.mobile-stack tbody tr {
+    display: block;
+    border: 1px solid #e3e9e1;
+    border-radius: 12px;
+    background: #fff;
+    overflow: hidden;
+  }
+
+  table.mobile-stack td {
+    display: grid;
+    grid-template-columns: minmax(110px, 42%) 1fr;
+    gap: 0.42rem;
+    border: 0;
+    border-bottom: 1px solid #edf2ec;
+    padding: 0.52rem 0.62rem;
+    align-items: center;
+  }
+
+  table.mobile-stack td:last-child {
+    border-bottom: 0;
+  }
+
+  table.mobile-stack td::before {
+    content: attr(data-label);
+    color: #5a756f;
+    font-size: 0.67rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  table.mobile-stack td[colspan] {
+    display: block;
+    border-bottom: 0;
+  }
+
+  table.mobile-stack td[colspan]::before {
+    content: none;
+  }
 }

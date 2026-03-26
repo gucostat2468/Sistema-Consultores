@@ -48,6 +48,46 @@ export class FinancialReceiptsPage {
     });
   }
 
+  signatureResponsibleLabel(order: ApprovalOrderItem): string {
+    const approvals = Array.isArray(order.distribution?.approvals) ? order.distribution.approvals : [];
+    const names: string[] = [];
+    const seen = new Set<string>();
+    for (const approval of approvals) {
+      const name = String(approval.signedByName || '').trim();
+      const normalized = name.toLowerCase();
+      if (name && !seen.has(normalized)) {
+        seen.add(normalized);
+        names.push(name);
+      }
+    }
+    if (names.length >= 2) {
+      return names.join('/');
+    }
+    if (names.length === 1) {
+      return names[0];
+    }
+    return order.signedByName || '-';
+  }
+
+  statusLabel(status: ApprovalOrderItem['status'] | string): string {
+    if (status === 'CONCLUIDO' || status === 'FATURADO') {
+      return 'Concluído';
+    }
+    if (status === 'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL') {
+      return 'Aguardando Diretor Comercial';
+    }
+    if (status === 'AGUARDANDO_ASSINATURA_ISABEL') {
+      return 'Aguardando Isabel';
+    }
+    if (status === 'NEGADO_SEM_LIMITE') {
+      return 'Negado sem limite';
+    }
+    if (status === 'DEVOLVIDO_REVISAO') {
+      return 'Devolvido para revisão';
+    }
+    return String(status);
+  }
+
   private load(): void {
     this.loading.set(true);
     this.errorMessage.set(null);
@@ -79,4 +119,3 @@ export class FinancialReceiptsPage {
     URL.revokeObjectURL(url);
   }
 }
-

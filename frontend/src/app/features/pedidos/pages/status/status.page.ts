@@ -18,7 +18,7 @@ import {
   PedidoService
 } from '../../services/pedido.service';
 
-type StatusTab = 'pendentes' | 'historico' | 'negados' | 'faturados' | 'importacoes' | 'config';
+type StatusTab = 'pendentes' | 'historico' | 'negados' | 'importacoes' | 'config';
 
 const DEFAULT_SUMMARY: ApprovalSummary = {
   total: 0,
@@ -143,15 +143,11 @@ export class StatusPage implements OnDestroy {
   );
 
   readonly historyItems = computed(() =>
-    this.items().filter((item) => item.status === 'CONCLUIDO')
+    this.items().filter((item) => item.status === 'CONCLUIDO' || item.status === 'FATURADO')
   );
 
   readonly negativeItems = computed(() =>
     this.items().filter((item) => item.status === 'NEGADO_SEM_LIMITE')
-  );
-
-  readonly billedItems = computed(() =>
-    this.items().filter((item) => item.status === 'FATURADO')
   );
 
   readonly latestSpreadsheetImport = computed(() => {
@@ -391,42 +387,8 @@ export class StatusPage implements OnDestroy {
       });
   }
 
-  canMarkAsBilled(order: ApprovalOrderItem): boolean {
-    return this.isAdmin() && order.status === 'CONCLUIDO';
-  }
-
   isSignatureFrozen(order: ApprovalOrderItem): boolean {
     return FROZEN_SIGNATURE_STATUSES.includes(order.status);
-  }
-
-  markAsBilled(order: ApprovalOrderItem): void {
-    if (!this.canMarkAsBilled(order) || this.actionLoading()) {
-      return;
-    }
-    const promptValue = window.prompt('Observação de faturamento (opcional):', '');
-    if (promptValue === null) {
-      return;
-    }
-    const note = promptValue.trim();
-    this.actionLoading.set(true);
-    this.errorMessage.set(null);
-    this.toastMessage.set(null);
-    this.pedidoService
-      .markAsBilled(order.id, note || null)
-      .pipe(finalize(() => this.actionLoading.set(false)))
-      .subscribe({
-        next: () => {
-          this.toastMessage.set(`Pedido ${order.orderNumber} marcado como FATURADO.`);
-          if (this.selectedOrder()?.id === order.id) {
-            this.closeDecisionModal();
-          }
-          this.loadMainData();
-        },
-        error: (error: { error?: { detail?: string }; message?: string }) => {
-          const detail = error.error?.detail ?? error.message ?? 'Falha ao marcar pedido como faturado.';
-          this.errorMessage.set(String(detail));
-        }
-      });
   }
 
   downloadManualSignedPreview(order: ApprovalOrderItem): void {
@@ -571,7 +533,7 @@ export class StatusPage implements OnDestroy {
       return 'Concluído';
     }
     if (status === 'FATURADO') {
-      return 'Faturado';
+      return 'Concluído';
     }
     if (status === 'EXCLUIDO') {
       return 'Excluído';
@@ -580,28 +542,61 @@ export class StatusPage implements OnDestroy {
   }
 
   statusOwnerLabel(status: ApprovalOrderStatus | string): string {
-    if (status === 'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL') {
+    if (
+      status === 'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL' ||
+      status === 'NEGADO_SEM_LIMITE' ||
+      status === 'DEVOLVIDO_REVISAO'
+    ) {
       return 'Diretor Comercial';
     }
     return 'responsável da etapa';
   }
 
   canCurrentUserSign(order: ApprovalOrderItem): boolean {
-    if (order.status === 'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL') {
+    if (
+      order.status === 'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL' ||
+      order.status === 'NEGADO_SEM_LIMITE' ||
+      order.status === 'DEVOLVIDO_REVISAO'
+    ) {
       return this.isCommercialDirector();
     }
     return false;
   }
 
   canSignOrder(order: ApprovalOrderItem): boolean {
-    return PENDING_SIGNATURE_STATUSES.includes(order.status) && this.canCurrentUserSign(order);
+    return this.canCurrentUserSign(order);
   }
 
   signatureActionLabel(order: ApprovalOrderItem): string {
-    if (order.status === 'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL') {
+    if (
+      order.status === 'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL' ||
+      order.status === 'NEGADO_SEM_LIMITE' ||
+      order.status === 'DEVOLVIDO_REVISAO'
+    ) {
       return 'Assinar e encaminhar para Isabel';
     }
     return 'Assinar etapa';
+  }
+
+  signatureResponsibleLabel(order: ApprovalOrderItem): string {
+    const approvals = Array.isArray(order.distribution?.approvals) ? order.distribution.approvals : [];
+    const names: string[] = [];
+    const seen = new Set<string>();
+    for (const approval of approvals) {
+      const name = String(approval.signedByName || '').trim();
+      const normalized = name.toLowerCase();
+      if (name && !seen.has(normalized)) {
+        seen.add(normalized);
+        names.push(name);
+      }
+    }
+    if (names.length >= 2) {
+      return names.join('/');
+    }
+    if (names.length === 1) {
+      return names[0];
+    }
+    return order.signedByName || '-';
   }
 
   importFileLabel(file: IngestionHistoryFile): string {
@@ -765,7 +760,13 @@ export class StatusPage implements OnDestroy {
   }
 
   private refreshLiveData(): void {
-    if (!this.canAccessStatus() || this.liveRefreshBusy || this.loading() || this.actionLoading()) {
+    if (
+      !this.canAccessStatus() ||
+      this.liveRefreshBusy ||
+      this.loading() ||
+      this.actionLoading() ||
+      this.decisionModalOpen()
+    ) {
       return;
     }
     if (typeof document !== 'undefined' && document.hidden) {
@@ -813,10 +814,14 @@ export class StatusPage implements OnDestroy {
       return;
     }
     this.selectedOrder.set(updated);
+    const wasCommercialSigningStage =
+      previousStatus === 'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL' ||
+      previousStatus === 'NEGADO_SEM_LIMITE' ||
+      previousStatus === 'DEVOLVIDO_REVISAO';
     if (
       this.decisionModalOpen() &&
-      previousStatus === 'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL' &&
-      updated.status !== 'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL'
+      wasCommercialSigningStage &&
+      updated.status !== previousStatus
     ) {
       this.closeDecisionModal();
       if (updated.status === 'AGUARDANDO_ASSINATURA_ISABEL') {

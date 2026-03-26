@@ -32,6 +32,17 @@ export interface ApprovalOrderItem {
   statusReason: string | null;
   extracted: Record<string, unknown>;
   distribution: {
+    approvals?: Array<{
+      stage?: string;
+      stageLabel?: string;
+      roleLabel?: string;
+      signedByUserId?: number;
+      signedByName?: string;
+      signedAt?: string;
+      signatureMode?: 'canvas' | 'hash' | string;
+      signatureHash?: string;
+      signatureCanvasPath?: string | null;
+    }>;
     notifications?: Array<{
       kind: string;
       to: string;

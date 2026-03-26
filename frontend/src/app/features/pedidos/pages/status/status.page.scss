@@ -23,7 +23,7 @@
 .summary-grid {
   margin-top: 0.8rem;
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 0.6rem;
 }
 
@@ -381,6 +381,24 @@ th {
   font-size: 0.8rem;
 }
 
+.approval-log {
+  margin-top: 0.45rem;
+  border-top: 1px solid #e6ebe3;
+  padding-top: 0.4rem;
+}
+
+.approval-log ul {
+  margin: 0.28rem 0 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.approval-log li {
+  font-size: 0.78rem;
+  color: #2e4a45;
+}
+
 .audit-block {
   border: 1px solid #e6ebe3;
   border-radius: 10px;
@@ -571,6 +589,60 @@ button.danger-ghost {
 
   .pdf-pane iframe {
     height: min(36dvh, 300px);
+  }
+
+  table.mobile-stack {
+    min-width: 0;
+    border-collapse: separate;
+    border-spacing: 0 0.55rem;
+  }
+
+  table.mobile-stack thead {
+    display: none;
+  }
+
+  table.mobile-stack tbody tr {
+    display: block;
+    border: 1px solid #e3e9e1;
+    border-radius: 12px;
+    background: #fff;
+    overflow: hidden;
+  }
+
+  table.mobile-stack td {
+    display: grid;
+    grid-template-columns: minmax(110px, 42%) 1fr;
+    gap: 0.42rem;
+    border: 0;
+    border-bottom: 1px solid #edf2ec;
+    padding: 0.52rem 0.62rem;
+    align-items: center;
+  }
+
+  table.mobile-stack td:last-child {
+    border-bottom: 0;
+  }
+
+  table.mobile-stack td::before {
+    content: attr(data-label);
+    color: #5a756f;
+    font-size: 0.67rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  table.mobile-stack td[colspan] {
+    display: block;
+    border-bottom: 0;
+  }
+
+  table.mobile-stack td[colspan]::before {
+    content: none;
+  }
+
+  .row-actions {
+    width: 100%;
   }
 }
 

@@ -32,11 +32,7 @@
     </article>
     <article class="card summary-card">
       <p>Concluídos</p>
-      <strong>{{ summary().done }}</strong>
-    </article>
-    <article class="card summary-card">
-      <p>Faturados</p>
-      <strong>{{ summary().billed }}</strong>
+      <strong>{{ summary().done + summary().billed }}</strong>
     </article>
   </section>
 
@@ -52,7 +48,6 @@
             <option value="DEVOLVIDO_REVISAO">Devolvido revisão</option>
             <option value="ASSINADO_AGUARDANDO_DISTRIBUICAO">Assinado distribuindo</option>
             <option value="CONCLUIDO">Concluído</option>
-            <option value="FATURADO">Faturado</option>
           </select>
         </label>
         <label>
@@ -96,9 +91,6 @@
     <button type="button" [class.active]="tab() === 'negados'" (click)="changeTab('negados')">
       Negados ({{ negativeItems().length }})
     </button>
-    <button type="button" [class.active]="tab() === 'faturados'" (click)="changeTab('faturados')">
-      Faturados ({{ billedItems().length }})
-    </button>
     @if (isAdmin()) {
       <button type="button" [class.active]="tab() === 'importacoes'" (click)="changeTab('importacoes')">
         Importações ({{ importHistoryItems().length }})
@@ -111,7 +103,7 @@
 
   @if (tab() === 'pendentes') {
     <section class="card table-card">
-      <table>
+      <table class="mobile-stack">
         <thead>
           <tr>
             <th>Pedido</th>
@@ -128,12 +120,12 @@
           } @else {
             @for (item of pendingItems(); track item.id) {
               <tr>
-                <td>{{ item.orderNumber }}</td>
-                <td>{{ item.customerName }}</td>
-                <td>{{ item.orderValue | currency: 'BRL' }}</td>
-                <td>{{ item.consultantName || '-' }}</td>
-                <td>{{ statusLabel(item.status) }}</td>
-                <td>
+                <td data-label="Pedido">{{ item.orderNumber }}</td>
+                <td data-label="Cliente">{{ item.customerName }}</td>
+                <td data-label="Valor">{{ item.orderValue | currency: 'BRL' }}</td>
+                <td data-label="Consultor">{{ item.consultantName || '-' }}</td>
+                <td data-label="Status">{{ statusLabel(item.status) }}</td>
+                <td data-label="Ações">
                   <div class="row-actions">
                     <button type="button" (click)="openDecisionModal(item)">
                       {{ canSignOrder(item) ? 'Assinar e encaminhar para Isabel' : 'Visualizar' }}
@@ -167,12 +159,13 @@
 
   @if (tab() === 'historico') {
     <section class="card table-card">
-      <table>
+      <table class="mobile-stack">
         <thead>
           <tr>
             <th>Pedido</th>
             <th>Cliente</th>
             <th>Status</th>
+            <th>Responsável pela assinatura</th>
             <th>Assinado em</th>
             <th>Atualizado</th>
             <th>Ações</th>
@@ -180,22 +173,20 @@
         </thead>
         <tbody>
           @if (historyItems().length === 0) {
-            <tr><td colspan="6">Sem pedidos concluídos para os filtros atuais.</td></tr>
+            <tr><td colspan="7">Sem pedidos concluídos para os filtros atuais.</td></tr>
           } @else {
             @for (item of historyItems(); track item.id) {
               <tr>
-                <td>{{ item.orderNumber }}</td>
-                <td>{{ item.customerName }}</td>
-                <td>{{ statusLabel(item.status) }}</td>
-                <td>{{ item.signedAt ? (item.signedAt | date: 'short') : '-' }}</td>
-                <td>{{ item.updatedAt | date: 'short' }}</td>
-                <td>
+                <td data-label="Pedido">{{ item.orderNumber }}</td>
+                <td data-label="Cliente">{{ item.customerName }}</td>
+                <td data-label="Status">{{ statusLabel(item.status) }}</td>
+                <td data-label="Responsável pela assinatura">{{ signatureResponsibleLabel(item) }}</td>
+                <td data-label="Assinado em">{{ item.signedAt ? (item.signedAt | date: 'short') : '-' }}</td>
+                <td data-label="Atualizado">{{ item.updatedAt | date: 'short' }}</td>
+                <td data-label="Ações">
                   <div class="row-actions">
                     <button type="button" class="ghost" (click)="openDecisionModal(item)">Detalhes</button>
                     <button type="button" (click)="downloadOrder(item)">Download</button>
-                    @if (canMarkAsBilled(item)) {
-                      <button type="button" class="success" (click)="markAsBilled(item)">Dar baixa (Faturado)</button>
-                    }
                     @if (canDelete(item)) {
                       <button
                         type="button"
@@ -225,7 +216,7 @@
 
   @if (tab() === 'negados') {
     <section class="card table-card">
-      <table>
+      <table class="mobile-stack">
         <thead>
           <tr>
             <th>Pedido</th>
@@ -242,68 +233,17 @@
           } @else {
             @for (item of negativeItems(); track item.id) {
               <tr>
-                <td>{{ item.orderNumber }}</td>
-                <td>{{ item.customerName }}</td>
-                <td>{{ item.orderValue | currency: 'BRL' }}</td>
-                <td>{{ item.overLimit | currency: 'BRL' }}</td>
-                <td>{{ item.statusReason || 'Sem motivo registrado' }}</td>
-                <td>
+                <td data-label="Pedido">{{ item.orderNumber }}</td>
+                <td data-label="Cliente">{{ item.customerName }}</td>
+                <td data-label="Valor">{{ item.orderValue | currency: 'BRL' }}</td>
+                <td data-label="Excesso">{{ item.overLimit | currency: 'BRL' }}</td>
+                <td data-label="Motivo">{{ item.statusReason || 'Sem motivo registrado' }}</td>
+                <td data-label="Ações">
                   <div class="row-actions">
-                    <button type="button" class="ghost" (click)="openDecisionModal(item)">Detalhes</button>
+                    <button type="button" class="ghost" (click)="openDecisionModal(item)">
+                      {{ canSignOrder(item) ? 'Assinar e encaminhar para Isabel' : 'Detalhes' }}
+                    </button>
                     <button type="button" (click)="downloadOrder(item)">PDF</button>
-                    @if (canDelete(item)) {
-                      <button
-                        type="button"
-                        class="icon-button trash"
-                        [disabled]="actionLoading()"
-                        title="Excluir solicitação"
-                        aria-label="Excluir solicitação"
-                        (click)="deleteOrder(item)"
-                      >
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                          <path
-                            d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"
-                            fill="currentColor"
-                          />
-                        </svg>
-                      </button>
-                    }
-                  </div>
-                </td>
-              </tr>
-            }
-          }
-        </tbody>
-      </table>
-    </section>
-  }
-
-  @if (tab() === 'faturados') {
-    <section class="card table-card">
-      <table>
-        <thead>
-          <tr>
-            <th>Pedido</th>
-            <th>Cliente</th>
-            <th>Responsável pela assinatura</th>
-            <th>Atualizado</th>
-            <th>Ações</th>
-          </tr>
-        </thead>
-        <tbody>
-          @if (billedItems().length === 0) {
-            <tr><td colspan="5">Nenhum pedido faturado.</td></tr>
-          } @else {
-            @for (item of billedItems(); track item.id) {
-              <tr>
-                <td>{{ item.orderNumber }}</td>
-                <td>{{ item.customerName }}</td>
-                <td>{{ item.signedByName || '-' }}</td>
-                <td>{{ item.updatedAt | date: 'short' }}</td>
-                <td>
-                  <div class="row-actions">
-                    <button type="button" class="ghost" (click)="openDecisionModal(item)">Detalhes</button>
-                    <button type="button" (click)="downloadOrder(item)">Download</button>
                     @if (canDelete(item)) {
                       <button
                         type="button"
@@ -563,11 +503,26 @@
             <p><strong>Limite:</strong> {{ order.creditLimit | currency: 'BRL' }}</p>
             <p><strong>Excesso:</strong> {{ order.overLimit | currency: 'BRL' }}</p>
             @if (order.signedByName || order.signedAt) {
-              <p><strong>Assinado por:</strong> {{ order.signedByName || '-' }}</p>
+              <p><strong>Assinado por:</strong> {{ signatureResponsibleLabel(order) }}</p>
               <p><strong>Assinado em:</strong> {{ order.signedAt ? (order.signedAt | date: 'short') : '-' }}</p>
             }
             @if (order.statusReason) {
               <p><strong>Motivo:</strong> {{ order.statusReason }}</p>
+            }
+            @if (order.distribution.approvals?.length) {
+              <div class="approval-log">
+                <p><strong>Registro de assinaturas (data/hora):</strong></p>
+                <ul>
+                  @for (approval of order.distribution.approvals; track $index) {
+                    <li>
+                      <strong>{{ approval.roleLabel || approval.stageLabel || 'Etapa' }}</strong>:
+                      {{ approval.signedByName || '-' }}
+                      em
+                      {{ approval.signedAt ? (approval.signedAt | date: 'short') : '-' }}
+                    </li>
+                  }
+                </ul>
+              </div>
             }
           </div>
 
@@ -661,7 +616,7 @@
               <section class="signature-block signature-readonly">
                 <h4>Assinatura registrada (somente leitura)</h4>
                 <p>
-                  Responsável: <strong>{{ order.signedByName || '-' }}</strong>
+                  Responsável: <strong>{{ signatureResponsibleLabel(order) }}</strong>
                   @if (order.signedAt) {
                     em <strong>{{ order.signedAt | date: 'short' }}</strong>
                   }
@@ -716,11 +671,6 @@
 
             <div class="actions">
               <button type="button" (click)="downloadOrder(order)">Download PDF</button>
-              @if (canMarkAsBilled(order)) {
-                <button type="button" class="success" [disabled]="actionLoading()" (click)="markAsBilled(order)">
-                  Dar baixa (Faturado)
-                </button>
-              }
             </div>
           }
         </section>

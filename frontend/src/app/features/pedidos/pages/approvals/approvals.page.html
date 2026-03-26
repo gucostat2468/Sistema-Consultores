@@ -56,7 +56,7 @@
 
   <section class="card table-card">
     <h3>Fila de assinatura da Isabel</h3>
-    <table>
+    <table class="mobile-stack">
       <thead>
         <tr>
           <th>Pedido</th>
@@ -73,12 +73,12 @@
         } @else {
           @for (item of pendingItems(); track item.id) {
             <tr>
-              <td>{{ item.orderNumber }}</td>
-              <td>{{ item.customerName }}</td>
-              <td>{{ item.orderValue | currency: 'BRL' }}</td>
-              <td>{{ item.consultantName || '-' }}</td>
-              <td>{{ statusLabel(item.status) }}</td>
-              <td>
+              <td data-label="Pedido">{{ item.orderNumber }}</td>
+              <td data-label="Cliente">{{ item.customerName }}</td>
+              <td data-label="Valor">{{ item.orderValue | currency: 'BRL' }}</td>
+              <td data-label="Consultor">{{ item.consultantName || '-' }}</td>
+              <td data-label="Status">{{ statusLabel(item.status) }}</td>
+              <td data-label="Ações">
                 <div class="row-actions">
                   <button type="button" (click)="openDecisionModal(item)">Assinar e concluir</button>
                   <button type="button" class="ghost" (click)="downloadOrder(item)">Download</button>
@@ -153,6 +153,21 @@
             <p><strong>Excesso:</strong> {{ order.overLimit | currency: 'BRL' }}</p>
             @if (order.statusReason) {
               <p><strong>Motivo:</strong> {{ order.statusReason }}</p>
+            }
+            @if (order.distribution.approvals?.length) {
+              <div class="approval-log">
+                <p><strong>Registro de assinaturas (data/hora):</strong></p>
+                <ul>
+                  @for (approval of order.distribution.approvals; track $index) {
+                    <li>
+                      <strong>{{ approval.roleLabel || approval.stageLabel || 'Etapa' }}</strong>:
+                      {{ approval.signedByName || '-' }}
+                      em
+                      {{ approval.signedAt ? (approval.signedAt | date: 'short') : '-' }}
+                    </li>
+                  }
+                </ul>
+              </div>
             }
           </div>
 

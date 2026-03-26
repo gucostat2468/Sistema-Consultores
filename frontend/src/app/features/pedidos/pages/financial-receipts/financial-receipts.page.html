@@ -41,13 +41,13 @@
   }
 
   <section class="card table-card">
-    <table>
+    <table class="mobile-stack">
       <thead>
         <tr>
           <th>Pedido</th>
           <th>Cliente</th>
           <th>Status</th>
-          <th>Responsável assinatura</th>
+          <th>Responsável pela assinatura</th>
           <th>Assinado em</th>
           <th>Atualizado</th>
           <th>Ações</th>
@@ -59,13 +59,13 @@
         } @else {
           @for (item of items(); track item.id) {
             <tr>
-              <td>{{ item.orderNumber }}</td>
-              <td>{{ item.customerName }}</td>
-              <td>{{ item.status }}</td>
-              <td>{{ item.signedByName || '-' }}</td>
-              <td>{{ item.signedAt ? (item.signedAt | date: 'short') : '-' }}</td>
-              <td>{{ item.updatedAt | date: 'short' }}</td>
-              <td>
+              <td data-label="Pedido">{{ item.orderNumber }}</td>
+              <td data-label="Cliente">{{ item.customerName }}</td>
+              <td data-label="Status">{{ statusLabel(item.status) }}</td>
+              <td data-label="Responsável pela assinatura">{{ signatureResponsibleLabel(item) }}</td>
+              <td data-label="Assinado em">{{ item.signedAt ? (item.signedAt | date: 'short') : '-' }}</td>
+              <td data-label="Atualizado">{{ item.updatedAt | date: 'short' }}</td>
+              <td data-label="Ações">
                 <button type="button" (click)="download(item)">Download</button>
               </td>
             </tr>
@@ -75,4 +75,3 @@
     </table>
   </section>
 }
-

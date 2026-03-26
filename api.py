@@ -1442,12 +1442,15 @@ def status_stage_label(status: str) -> str:
 
 
 def next_status_for_signature(status: str) -> str | None:
-    if status == ORDER_STATUS_AWAITING_COMMERCIAL_SIGNATURE:
+    if status in {
+        ORDER_STATUS_AWAITING_COMMERCIAL_SIGNATURE,
+        ORDER_STATUS_NEGATIVE,
+        ORDER_STATUS_RETURNED,
+        ORDER_STATUS_LEGACY_AWAITING_FINANCIAL_SIGNATURE,
+    }:
         return ORDER_STATUS_AWAITING_SIGNATURE
     if status == ORDER_STATUS_AWAITING_SIGNATURE:
         return ORDER_STATUS_DONE
-    if status == ORDER_STATUS_LEGACY_AWAITING_FINANCIAL_SIGNATURE:
-        return ORDER_STATUS_AWAITING_SIGNATURE
     return None
 
 
@@ -3812,7 +3815,12 @@ def pedidos_assinar(
         stage_code = ""
         stage_label = ""
         next_label = status_stage_label(next_status) if next_status else ""
-        if current_status == ORDER_STATUS_AWAITING_COMMERCIAL_SIGNATURE:
+        is_commercial_stage_signature = current_status in {
+            ORDER_STATUS_AWAITING_COMMERCIAL_SIGNATURE,
+            ORDER_STATUS_NEGATIVE,
+            ORDER_STATUS_RETURNED,
+        }
+        if is_commercial_stage_signature:
             ensure_commercial_signature_user(user)
             stage_code = "comercial"
             stage_label = "Diretor Comercial"
@@ -3900,7 +3908,28 @@ def pedidos_assinar(
                     error_message=error_message,
                 )
 
-        if current_status == ORDER_STATUS_AWAITING_COMMERCIAL_SIGNATURE:
+        if is_commercial_stage_signature:
+            original_pdf_path = Path(order_row["original_pdf_path"])
+            signed_pdf_path = ORDER_SIGNED_DIR / f"{order_row['external_id']}-signed.pdf"
+            _, final_size = generate_signed_order_pdf(
+                original_pdf_path=original_pdf_path,
+                signed_pdf_path=signed_pdf_path,
+                signature_image_path=signature_image_path,
+                order_number=order_row["order_number"],
+                customer_name=order_row["customer_name"],
+                order_value_cents=int(order_row["order_value_cents"]),
+                signed_by_name=user.name,
+                signature_mode=signature_mode,
+                signed_at_iso=signed_at_iso,
+                signature_hash=signature_hash,
+                approvals=approvals,
+            )
+
+            attachment_for_isabel = (
+                signed_pdf_path
+                if signed_pdf_path.exists()
+                else (stage_attachment if stage_attachment.exists() else None)
+            )
             recipients = split_email_targets(config.get("isabel_emails"))
             send_and_log(
                 "request_isabel_signature",
@@ -3914,7 +3943,7 @@ def pedidos_assinar(
                     f"Proxima etapa: {status_stage_label(ORDER_STATUS_AWAITING_SIGNATURE)}\n\n"
                     f"Painel de Status: {ORDER_APPROVAL_PANEL_URL}\n"
                 ),
-                stage_attachment if stage_attachment.exists() else None,
+                attachment_for_isabel,
             )
         else:
             original_pdf_path = Path(order_row["original_pdf_path"])
@@ -4331,6 +4360,46 @@ def pedidos_download(
     with get_connection() as conn:
         order_row = fetch_order_row_or_404(conn, order_id)
         ensure_order_access(user, order_row)
+
+        signed_path = Path(order_row["signed_pdf_path"]) if order_row.get("signed_pdf_path") else None
+        needs_stage_preview = (
+            order_row.get("status") == ORDER_STATUS_AWAITING_SIGNATURE
+            and (signed_path is None or not signed_path.exists())
+        )
+        if needs_stage_preview:
+            distribution = normalize_order_distribution(order_row.get("distribution_json"))
+            approvals = list(distribution.get("approvals") or [])
+            if approvals:
+                last_approval = approvals[-1]
+                signature_path_raw = str(last_approval.get("signatureCanvasPath") or "").strip()
+                signature_image_path = Path(signature_path_raw) if signature_path_raw else None
+                if signature_image_path is not None and not signature_image_path.exists():
+                    signature_image_path = None
+
+                stage_signed_path = ORDER_SIGNED_DIR / f"{order_row['external_id']}-signed.pdf"
+                generate_signed_order_pdf(
+                    original_pdf_path=Path(order_row["original_pdf_path"]),
+                    signed_pdf_path=stage_signed_path,
+                    signature_image_path=signature_image_path,
+                    order_number=str(order_row["order_number"] or ""),
+                    customer_name=str(order_row["customer_name"] or ""),
+                    order_value_cents=int(order_row["order_value_cents"] or 0),
+                    signed_by_name=str(last_approval.get("signedByName") or "Diretor Comercial"),
+                    signature_mode=str(last_approval.get("signatureMode") or order_row.get("signature_mode") or "hash"),
+                    signed_at_iso=str(last_approval.get("signedAt") or order_row.get("signed_at") or utc_now_iso()),
+                    signature_hash=str(last_approval.get("signatureHash") or order_row.get("signature_hash") or ""),
+                    approvals=approvals,
+                )
+                conn.execute(
+                    """
+                    UPDATE order_requests
+                    SET signed_pdf_path = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (stage_signed_path.as_posix(), utc_now_iso(), int(order_id)),
+                )
+                conn.commit()
+                order_row["signed_pdf_path"] = stage_signed_path.as_posix()
 
     signed_path = Path(order_row["signed_pdf_path"]) if order_row.get("signed_pdf_path") else None
     file_path = signed_path if signed_path and signed_path.exists() else Path(order_row["original_pdf_path"])
