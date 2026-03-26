@@ -13,7 +13,7 @@ import {
   PedidoService
 } from '../../services/pedido.service';
 
-const LIVE_REFRESH_INTERVAL_MS = 1500;
+const LIVE_REFRESH_INTERVAL_MS = 2500;
 
 @Component({
   selector: 'app-approvals-page',
@@ -484,6 +484,9 @@ export class ApprovalsPage implements OnDestroy {
     if (this.liveRefreshBusy || this.loading() || this.actionLoading()) {
       return;
     }
+    if (typeof document !== 'undefined' && document.hidden) {
+      return;
+    }
     this.liveRefreshBusy = true;
     const filters = this.filtersForm.getRawValue();
     this.pedidoService
@@ -499,8 +502,12 @@ export class ApprovalsPage implements OnDestroy {
           this.items.set(response.items);
           this.syncSelectedOrderFromLiveData(response.items);
         },
-        error: () => {
-          // Keep screen responsive and retry automatically on next cycle.
+        error: (error: { status?: number }) => {
+          if ((error?.status ?? 0) === 401) {
+            this.stopLiveRefresh();
+            this.errorMessage.set('Sessão expirada. Faça login novamente para continuar.');
+          }
+          // Keep screen responsive and retry automatically on next cycle for transient errors.
         }
       });
   }

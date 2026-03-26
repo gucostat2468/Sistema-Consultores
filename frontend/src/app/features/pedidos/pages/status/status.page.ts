@@ -40,7 +40,7 @@ const FROZEN_SIGNATURE_STATUSES: ApprovalOrderStatus[] = [
   'FATURADO'
 ];
 
-const LIVE_REFRESH_INTERVAL_MS = 1500;
+const LIVE_REFRESH_INTERVAL_MS = 2500;
 
 @Component({
   selector: 'app-status-page',
@@ -371,12 +371,15 @@ export class StatusPage implements OnDestroy {
       .pipe(finalize(() => this.actionLoading.set(false)))
       .subscribe({
         next: (response) => {
+          const isForwardedToIsabel = response.order.status === 'AGUARDANDO_ASSINATURA_ISABEL';
           const warning =
             response.failedEmails > 0
               ? ` Houve ${response.failedEmails} falha(s) de e-mail na distribuição.`
               : '';
           this.toastMessage.set(
-            `Etapa concluída. Pedido agora está em ${this.statusLabel(response.order.status)}.` + warning
+            isForwardedToIsabel
+              ? 'Pedido assinado e encaminhado para Aprovações da Isabel.' + warning
+              : `Etapa concluída. Pedido agora está em ${this.statusLabel(response.order.status)}.` + warning
           );
           this.closeDecisionModal();
           this.loadMainData();
@@ -596,7 +599,7 @@ export class StatusPage implements OnDestroy {
 
   signatureActionLabel(order: ApprovalOrderItem): string {
     if (order.status === 'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL') {
-      return 'Assinar como Diretor Comercial';
+      return 'Assinar e encaminhar para Isabel';
     }
     return 'Assinar etapa';
   }
@@ -765,6 +768,9 @@ export class StatusPage implements OnDestroy {
     if (!this.canAccessStatus() || this.liveRefreshBusy || this.loading() || this.actionLoading()) {
       return;
     }
+    if (typeof document !== 'undefined' && document.hidden) {
+      return;
+    }
     this.liveRefreshBusy = true;
     const filters = this.filtersForm.getRawValue();
     forkJoin({
@@ -784,8 +790,12 @@ export class StatusPage implements OnDestroy {
           this.items.set(list.items);
           this.syncSelectedOrderFromLiveData(list.items);
         },
-        error: () => {
-          // Keep screen responsive and retry automatically on next cycle.
+        error: (error: { status?: number }) => {
+          if ((error?.status ?? 0) === 401) {
+            this.stopLiveRefresh();
+            this.errorMessage.set('Sessão expirada. Faça login novamente para continuar.');
+          }
+          // Keep screen responsive and retry automatically on next cycle for transient errors.
         }
       });
   }
@@ -795,6 +805,7 @@ export class StatusPage implements OnDestroy {
     if (!selected) {
       return;
     }
+    const previousStatus = selected.status;
     const updated = items.find((item) => item.id === selected.id);
     if (!updated) {
       this.closeDecisionModal();
@@ -804,12 +815,17 @@ export class StatusPage implements OnDestroy {
     this.selectedOrder.set(updated);
     if (
       this.decisionModalOpen() &&
+      previousStatus === 'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL' &&
       updated.status !== 'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL'
     ) {
       this.closeDecisionModal();
-      this.toastMessage.set(
-        `Pedido ${updated.orderNumber} atualizado para ${this.statusLabel(updated.status)}.`
-      );
+      if (updated.status === 'AGUARDANDO_ASSINATURA_ISABEL') {
+        this.toastMessage.set(`Pedido ${updated.orderNumber} assinado e encaminhado para Isabel.`);
+      } else {
+        this.toastMessage.set(
+          `Pedido ${updated.orderNumber} atualizado para ${this.statusLabel(updated.status)}.`
+        );
+      }
     }
   }
 

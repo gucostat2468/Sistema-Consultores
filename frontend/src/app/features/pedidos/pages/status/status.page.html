@@ -136,7 +136,7 @@
                 <td>
                   <div class="row-actions">
                     <button type="button" (click)="openDecisionModal(item)">
-                      {{ canSignOrder(item) ? 'Assinar etapa' : 'Visualizar' }}
+                      {{ canSignOrder(item) ? 'Assinar e encaminhar para Isabel' : 'Visualizar' }}
                     </button>
                     @if (canDelete(item)) {
                       <button
