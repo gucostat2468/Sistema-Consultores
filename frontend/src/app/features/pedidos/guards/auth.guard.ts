@@ -16,6 +16,25 @@ function getOperationalUsernames(): string[] {
     .filter(Boolean);
 }
 
+function getCommercialDirectorUsernames(): string[] {
+  return (
+    (environment as { commercialDirectorUsernames?: string[] }).commercialDirectorUsernames ?? [
+      'marcos',
+      'marcos_dronepro'
+    ]
+  )
+    .map((item) => String(item || '').trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function getIsabelUsernames(): string[] {
+  return (
+    (environment as { isabelUsernames?: string[] }).isabelUsernames ?? ['isabel', 'isabel_dronepro']
+  )
+    .map((item) => String(item || '').trim().toLowerCase())
+    .filter(Boolean);
+}
+
 function getFinancialUsernames(): string[] {
   return (
     (environment as { financialUsernames?: string[] }).financialUsernames ?? ['vitor_financeiro']
@@ -33,15 +52,47 @@ export const statusAccessGuard: CanActivateFn = () => {
     return router.createUrlTree(['/login']);
   }
 
-  const operationalUsers = getOperationalUsernames();
-  const isOperationalUser = operationalUsers.includes(String(user.username || '').trim().toLowerCase());
-  if (isOperationalUser) {
+  const username = String(user.username || '').trim().toLowerCase();
+  const commercialUsers = getCommercialDirectorUsernames();
+  if (commercialUsers.includes(username)) {
     return true;
   }
   return router.createUrlTree(['/app/dashboard']);
 };
 
-export const operationalAccessGuard = statusAccessGuard;
+export const approvalsAccessGuard: CanActivateFn = () => {
+  const auth = inject(AuthService);
+  const router = inject(Router);
+  const user = auth.currentUser();
+
+  if (!user) {
+    return router.createUrlTree(['/login']);
+  }
+
+  const username = String(user.username || '').trim().toLowerCase();
+  const isabelUsers = getIsabelUsernames();
+  if (isabelUsers.includes(username)) {
+    return true;
+  }
+  return router.createUrlTree(['/app/dashboard']);
+};
+
+export const operationalAccessGuard: CanActivateFn = () => {
+  const auth = inject(AuthService);
+  const router = inject(Router);
+  const user = auth.currentUser();
+
+  if (!user) {
+    return router.createUrlTree(['/login']);
+  }
+
+  const username = String(user.username || '').trim().toLowerCase();
+  const operationalUsers = getOperationalUsernames();
+  if (operationalUsers.includes(username)) {
+    return true;
+  }
+  return router.createUrlTree(['/app/dashboard']);
+};
 
 export const financialReceiptsAccessGuard: CanActivateFn = () => {
   const auth = inject(AuthService);

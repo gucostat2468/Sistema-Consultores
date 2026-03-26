@@ -30,6 +30,18 @@ const DEFAULT_SUMMARY: ApprovalSummary = {
   signedToday: 0
 };
 
+const PENDING_SIGNATURE_STATUSES: ApprovalOrderStatus[] = [
+  'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL'
+];
+
+const FROZEN_SIGNATURE_STATUSES: ApprovalOrderStatus[] = [
+  'ASSINADO_AGUARDANDO_DISTRIBUICAO',
+  'CONCLUIDO',
+  'FATURADO'
+];
+
+const LIVE_REFRESH_INTERVAL_MS = 1500;
+
 @Component({
   selector: 'app-status-page',
   standalone: true,
@@ -48,7 +60,7 @@ export class StatusPage implements OnDestroy {
   @ViewChild('signaturePad') signaturePad?: ElementRef<HTMLCanvasElement>;
 
   readonly user = this.auth.currentUser;
-  readonly isStatusOperator = computed(() => {
+  readonly isOperationalUser = computed(() => {
     const allowed = (
       (environment as { operationalUsernames?: string[] }).operationalUsernames ?? [
         'isabel',
@@ -62,16 +74,20 @@ export class StatusPage implements OnDestroy {
     const username = String(this.user()?.username || '').trim().toLowerCase();
     return allowed.includes(username);
   });
-  readonly isAdmin = computed(() => this.isStatusOperator());
-  readonly isIsabel = computed(() => {
+  readonly isCommercialDirector = computed(() => {
     const allowed = (
-      (environment as { isabelUsernames?: string[] }).isabelUsernames ?? ['isabel', 'isabel_dronepro']
+      (environment as { commercialDirectorUsernames?: string[] }).commercialDirectorUsernames ?? [
+        'marcos',
+        'marcos_dronepro'
+      ]
     )
       .map((item) => String(item || '').trim().toLowerCase())
       .filter(Boolean);
     const username = String(this.user()?.username || '').trim().toLowerCase();
     return allowed.includes(username);
   });
+  readonly isAdmin = computed(() => this.isCommercialDirector());
+  readonly canAccessStatus = computed(() => this.isCommercialDirector());
 
   readonly loading = signal(true);
   readonly actionLoading = signal(false);
@@ -116,10 +132,6 @@ export class StatusPage implements OnDestroy {
     dateTo: ['']
   });
 
-  readonly returnForm = this.fb.nonNullable.group({
-    reason: ['', [Validators.required, Validators.minLength(5), Validators.maxLength(800)]]
-  });
-
   readonly configForm = this.fb.nonNullable.group({
     isabelEmails: ['', [Validators.required]],
     vitorEmails: ['', [Validators.required]],
@@ -127,7 +139,7 @@ export class StatusPage implements OnDestroy {
   });
 
   readonly pendingItems = computed(() =>
-    this.items().filter((item) => item.status === 'AGUARDANDO_ASSINATURA_ISABEL')
+    this.items().filter((item) => PENDING_SIGNATURE_STATUSES.includes(item.status))
   );
 
   readonly historyItems = computed(() =>
@@ -233,7 +245,6 @@ export class StatusPage implements OnDestroy {
     this.selectedOrder.set(order);
     this.decisionModalOpen.set(true);
     this.previewTab.set('pedido');
-    this.returnForm.reset({ reason: '' });
     this.hasSignature.set(false);
     this.manualSigning.set(false);
     this.decisionEvents.set([]);
@@ -259,7 +270,6 @@ export class StatusPage implements OnDestroy {
     this.decisionModalOpen.set(false);
     this.selectedOrder.set(null);
     this.decisionEvents.set([]);
-    this.returnForm.reset({ reason: '' });
     this.hasSignature.set(false);
     this.manualSigning.set(false);
     this.revokePreview();
@@ -330,93 +340,49 @@ export class StatusPage implements OnDestroy {
   }
 
   signSelectedOrder(): void {
-    if (!this.isStatusOperator()) {
-      this.errorMessage.set('Somente Marcos e Isabel podem concluir pedidos.');
-      return;
-    }
     const order = this.selectedOrder();
-    if (!order || order.status !== 'AGUARDANDO_ASSINATURA_ISABEL' || this.actionLoading()) {
+    if (!order || this.actionLoading()) {
       return;
     }
+    if (!this.canCurrentUserSign(order)) {
+      this.errorMessage.set(
+        `Assinatura desta etapa permitida somente para ${this.statusOwnerLabel(order.status)}.`
+      );
+      return;
+    }
+
     const mode = this.signatureMode();
     let signatureCanvasBase64: string | null = null;
     if (mode === 'canvas') {
       if (!this.hasSignature()) {
-        this.errorMessage.set('Assinatura manuscrita obrigatoria antes de aprovar.');
+        this.errorMessage.set('Assinatura manuscrita obrigatoria para avançar a etapa.');
         return;
       }
       signatureCanvasBase64 = this.signaturePad?.nativeElement.toDataURL('image/png') ?? null;
-    }
-    const billingNote = window.prompt('Observação final de faturamento (opcional):', '');
-    if (billingNote === null) {
-      return;
     }
 
     this.actionLoading.set(true);
     this.errorMessage.set(null);
     this.pedidoService
-      .signAndFinalizeOrder(order.id, {
+      .signOrder(order.id, {
         signatureMode: mode,
-        signatureCanvasBase64,
-        billingNote: billingNote.trim() || null
+        signatureCanvasBase64
       })
       .pipe(finalize(() => this.actionLoading.set(false)))
       .subscribe({
         next: (response) => {
           const warning =
             response.failedEmails > 0
-              ? ` Pedido concluido com ${response.failedEmails} falha(s) de e-mail.`
+              ? ` Houve ${response.failedEmails} falha(s) de e-mail na distribuição.`
               : '';
-          this.pedidoService.downloadOrderPdf(response.order.id).subscribe({
-            next: (blob) => {
-              this.downloadBlob(blob, `${response.order.orderNumber}-assinado.pdf`);
-              this.toastMessage.set('Pedido assinado, aprovado, faturado e PDF assinado baixado.' + warning);
-              this.closeDecisionModal();
-              this.loadMainData();
-            },
-            error: () => {
-              this.toastMessage.set(
-                'Pedido assinado, aprovado e faturado, mas falhou o download automático do PDF assinado.' + warning
-              );
-              this.closeDecisionModal();
-              this.loadMainData();
-            }
-          });
-        },
-        error: (error: { error?: { detail?: string }; message?: string }) => {
-          const detail = error.error?.detail ?? error.message ?? 'Falha ao assinar pedido.';
-          this.errorMessage.set(String(detail));
-        }
-      });
-  }
-
-  returnSelectedOrder(): void {
-    if (!this.isIsabel()) {
-      this.errorMessage.set('Somente Isabel pode devolver pedidos.');
-      return;
-    }
-    const order = this.selectedOrder();
-    if (!order || order.status !== 'AGUARDANDO_ASSINATURA_ISABEL' || this.actionLoading()) {
-      return;
-    }
-    if (this.returnForm.invalid) {
-      this.returnForm.markAllAsTouched();
-      return;
-    }
-    const reason = this.returnForm.getRawValue().reason.trim();
-    this.actionLoading.set(true);
-    this.errorMessage.set(null);
-    this.pedidoService
-      .returnOrder(order.id, reason)
-      .pipe(finalize(() => this.actionLoading.set(false)))
-      .subscribe({
-        next: () => {
-          this.toastMessage.set('Pedido devolvido para revisão com justificativa registrada.');
+          this.toastMessage.set(
+            `Etapa concluída. Pedido agora está em ${this.statusLabel(response.order.status)}.` + warning
+          );
           this.closeDecisionModal();
           this.loadMainData();
         },
         error: (error: { error?: { detail?: string }; message?: string }) => {
-          const detail = error.error?.detail ?? error.message ?? 'Falha ao devolver pedido.';
+          const detail = error.error?.detail ?? error.message ?? 'Falha ao assinar pedido.';
           this.errorMessage.set(String(detail));
         }
       });
@@ -427,7 +393,7 @@ export class StatusPage implements OnDestroy {
   }
 
   isSignatureFrozen(order: ApprovalOrderItem): boolean {
-    return ['ASSINADO_AGUARDANDO_DISTRIBUICAO', 'CONCLUIDO', 'FATURADO'].includes(order.status);
+    return FROZEN_SIGNATURE_STATUSES.includes(order.status);
   }
 
   markAsBilled(order: ApprovalOrderItem): void {
@@ -582,6 +548,59 @@ export class StatusPage implements OnDestroy {
     return status;
   }
 
+  statusLabel(status: ApprovalOrderStatus | string): string {
+    if (status === 'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL') {
+      return 'Aguardando Diretor Comercial';
+    }
+    if (status === 'AGUARDANDO_ASSINATURA_ISABEL') {
+      return 'Aguardando Isabel';
+    }
+    if (status === 'NEGADO_SEM_LIMITE') {
+      return 'Negado sem limite';
+    }
+    if (status === 'DEVOLVIDO_REVISAO') {
+      return 'Devolvido para revisão';
+    }
+    if (status === 'ASSINADO_AGUARDANDO_DISTRIBUICAO') {
+      return 'Assinado aguardando distribuição';
+    }
+    if (status === 'CONCLUIDO') {
+      return 'Concluído';
+    }
+    if (status === 'FATURADO') {
+      return 'Faturado';
+    }
+    if (status === 'EXCLUIDO') {
+      return 'Excluído';
+    }
+    return String(status);
+  }
+
+  statusOwnerLabel(status: ApprovalOrderStatus | string): string {
+    if (status === 'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL') {
+      return 'Diretor Comercial';
+    }
+    return 'responsável da etapa';
+  }
+
+  canCurrentUserSign(order: ApprovalOrderItem): boolean {
+    if (order.status === 'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL') {
+      return this.isCommercialDirector();
+    }
+    return false;
+  }
+
+  canSignOrder(order: ApprovalOrderItem): boolean {
+    return PENDING_SIGNATURE_STATUSES.includes(order.status) && this.canCurrentUserSign(order);
+  }
+
+  signatureActionLabel(order: ApprovalOrderItem): string {
+    if (order.status === 'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL') {
+      return 'Assinar como Diretor Comercial';
+    }
+    return 'Assinar etapa';
+  }
+
   importFileLabel(file: IngestionHistoryFile): string {
     return this.isSpreadsheetFile(file.fileType) ? 'Planilha' : 'PDF';
   }
@@ -732,7 +751,7 @@ export class StatusPage implements OnDestroy {
 
   private startLiveRefresh(): void {
     this.stopLiveRefresh();
-    this.liveRefreshHandle = setInterval(() => this.refreshLiveData(), 3000);
+    this.liveRefreshHandle = setInterval(() => this.refreshLiveData(), LIVE_REFRESH_INTERVAL_MS);
   }
 
   private stopLiveRefresh(): void {
@@ -743,7 +762,7 @@ export class StatusPage implements OnDestroy {
   }
 
   private refreshLiveData(): void {
-    if (!this.isStatusOperator() || this.liveRefreshBusy || this.loading() || this.actionLoading()) {
+    if (!this.canAccessStatus() || this.liveRefreshBusy || this.loading() || this.actionLoading()) {
       return;
     }
     this.liveRefreshBusy = true;
@@ -763,18 +782,35 @@ export class StatusPage implements OnDestroy {
         next: ({ summary, list }) => {
           this.summary.set(summary);
           this.items.set(list.items);
-          const selectedId = this.selectedOrder()?.id;
-          if (selectedId) {
-            const updated = list.items.find((item) => item.id === selectedId);
-            if (updated) {
-              this.selectedOrder.set(updated);
-            }
-          }
+          this.syncSelectedOrderFromLiveData(list.items);
         },
         error: () => {
           // Keep screen responsive and retry automatically on next cycle.
         }
       });
+  }
+
+  private syncSelectedOrderFromLiveData(items: ApprovalOrderItem[]): void {
+    const selected = this.selectedOrder();
+    if (!selected) {
+      return;
+    }
+    const updated = items.find((item) => item.id === selected.id);
+    if (!updated) {
+      this.closeDecisionModal();
+      this.toastMessage.set(`Pedido ${selected.orderNumber} saiu da visualização atual.`);
+      return;
+    }
+    this.selectedOrder.set(updated);
+    if (
+      this.decisionModalOpen() &&
+      updated.status !== 'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL'
+    ) {
+      this.closeDecisionModal();
+      this.toastMessage.set(
+        `Pedido ${updated.orderNumber} atualizado para ${this.statusLabel(updated.status)}.`
+      );
+    }
   }
 
   private loadConfigData(): void {

@@ -44,6 +44,16 @@
           Status
         </a>
       }
+      @if (canAccessApprovals()) {
+        <a
+          routerLink="/app/aprovacoes"
+          [queryParams]="navQueryParams()"
+          routerLinkActive="active"
+          (click)="closeMobileNav()"
+        >
+          Aprovações
+        </a>
+      }
       @if (canAccessReportUpdate()) {
         <a
           routerLink="/app/atualizacao-report"

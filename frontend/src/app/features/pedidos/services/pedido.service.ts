@@ -4,6 +4,7 @@ import { Observable } from 'rxjs';
 import { environment } from '../../../../environments/environment';
 
 export type ApprovalOrderStatus =
+  | 'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL'
   | 'AGUARDANDO_ASSINATURA_ISABEL'
   | 'NEGADO_SEM_LIMITE'
   | 'DEVOLVIDO_REVISAO'
@@ -223,16 +224,22 @@ export class PedidoService {
       signatureCanvasBase64?: string | null;
     }
   ): Observable<{
-    order: ApprovalOrderItem;
-    downloadUrl: string;
-    signatureMode: 'canvas' | 'hash';
-    failedEmails: number;
-  }> {
+      order: ApprovalOrderItem;
+      downloadUrl: string;
+      signatureMode: 'canvas' | 'hash';
+      failedEmails: number;
+      billed?: boolean;
+      nextStatus?: ApprovalOrderStatus;
+      nextStageLabel?: string;
+    }> {
     return this.http.post<{
       order: ApprovalOrderItem;
       downloadUrl: string;
       signatureMode: 'canvas' | 'hash';
       failedEmails: number;
+      billed?: boolean;
+      nextStatus?: ApprovalOrderStatus;
+      nextStageLabel?: string;
     }>(`${this.baseUrl}/${orderId}/assinar`, payload);
   }
 
@@ -244,18 +251,22 @@ export class PedidoService {
       billingNote?: string | null;
     }
   ): Observable<{
-    order: ApprovalOrderItem;
-    downloadUrl: string;
-    signatureMode: 'canvas' | 'hash';
-    failedEmails: number;
-    billed: boolean;
-  }> {
+      order: ApprovalOrderItem;
+      downloadUrl: string;
+      signatureMode: 'canvas' | 'hash';
+      failedEmails: number;
+      billed: boolean;
+      nextStatus?: ApprovalOrderStatus;
+      nextStageLabel?: string;
+    }> {
     return this.http.post<{
       order: ApprovalOrderItem;
       downloadUrl: string;
       signatureMode: 'canvas' | 'hash';
       failedEmails: number;
       billed: boolean;
+      nextStatus?: ApprovalOrderStatus;
+      nextStageLabel?: string;
     }>(`${this.baseUrl}/${orderId}/assinar-concluir`, payload);
   }
 

@@ -5,6 +5,7 @@ export const environment = {
   useMockApi: false,
   isabelSignatureMode: 'canvas',
   isabelUsernames: ['isabel', 'isabel_dronepro'],
+  commercialDirectorUsernames: ['marcos', 'marcos_dronepro'],
   operationalUsernames: ['isabel', 'isabel_dronepro', 'marcos', 'marcos_dronepro'],
   financialUsernames: ['vitor_financeiro']
 };

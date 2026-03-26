@@ -1,0 +1,243 @@
+@if (loading()) {
+  <section class="card state">
+    <p>Carregando sessão Aprovações...</p>
+  </section>
+} @else {
+  <section class="card intro">
+    <h2>Aprovações da Isabel</h2>
+    <p>Assine os pedidos que já passaram pela assinatura do Marcos e conclua para faturamento.</p>
+    <p>Atualização automática em tempo real para receber pedidos assinados pelo Marcos sem atraso.</p>
+  </section>
+
+  <section class="summary-grid">
+    <article class="card summary-card">
+      <p>Pendentes da Isabel</p>
+      <strong>{{ pendingItems().length }}</strong>
+    </article>
+    <article class="card summary-card">
+      <p>Concluídos</p>
+      <strong>{{ concludedItems().length }}</strong>
+    </article>
+  </section>
+
+  <section class="card filters">
+    <form [formGroup]="filtersForm">
+      <div class="grid">
+        <label>
+          Cliente
+          <input type="text" formControlName="customer" placeholder="Filtrar por nome" />
+        </label>
+        <label>
+          De
+          <input type="date" formControlName="dateFrom" />
+        </label>
+        <label>
+          Até
+          <input type="date" formControlName="dateTo" />
+        </label>
+      </div>
+      <div class="actions">
+        <button type="button" class="ghost" (click)="clearFilters()">Limpar filtros</button>
+        <button type="button" (click)="applyFilters()">Aplicar filtros</button>
+      </div>
+    </form>
+  </section>
+
+  @if (errorMessage()) {
+    <section class="card state state-error">
+      <p>{{ errorMessage() }}</p>
+    </section>
+  }
+  @if (toastMessage()) {
+    <section class="card state state-success">
+      <p>{{ toastMessage() }}</p>
+    </section>
+  }
+
+  <section class="card table-card">
+    <h3>Fila de assinatura da Isabel</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Pedido</th>
+          <th>Cliente</th>
+          <th>Valor</th>
+          <th>Consultor</th>
+          <th>Status</th>
+          <th>Ações</th>
+        </tr>
+      </thead>
+      <tbody>
+        @if (pendingItems().length === 0) {
+          <tr><td colspan="6">Nenhum pedido pendente para assinatura da Isabel.</td></tr>
+        } @else {
+          @for (item of pendingItems(); track item.id) {
+            <tr>
+              <td>{{ item.orderNumber }}</td>
+              <td>{{ item.customerName }}</td>
+              <td>{{ item.orderValue | currency: 'BRL' }}</td>
+              <td>{{ item.consultantName || '-' }}</td>
+              <td>{{ statusLabel(item.status) }}</td>
+              <td>
+                <div class="row-actions">
+                  <button type="button" (click)="openDecisionModal(item)">Assinar e concluir</button>
+                  <button type="button" class="ghost" (click)="downloadOrder(item)">Download</button>
+                </div>
+              </td>
+            </tr>
+          }
+        }
+      </tbody>
+    </table>
+  </section>
+}
+
+@if (decisionModalOpen() && selectedOrder(); as order) {
+  <section class="modal-backdrop">
+    <article class="modal card">
+      <header>
+        <h3>{{ order.orderNumber }} - {{ order.customerName }}</h3>
+        <button type="button" class="ghost" (click)="closeDecisionModal()">Fechar</button>
+      </header>
+
+      <div class="modal-grid">
+        <section class="pdf-pane">
+          <p class="label">Documentos do fluxo</p>
+          @if (previewLoading()) {
+            <p>Carregando PDF do pedido...</p>
+          } @else if (!previewUrl()) {
+            <p>Pré-visualização do pedido indisponível.</p>
+          } @else {
+            <iframe [src]="previewUrl()" title="PDF do pedido"></iframe>
+          }
+
+          <div class="actions preview-actions">
+            <button type="button" class="ghost" (click)="downloadOrder(order)">Baixar PDF do pedido</button>
+            <button type="button" class="ghost" (click)="downloadOrderAnalysis(order)">
+              Baixar PDF de saúde financeira
+            </button>
+          </div>
+
+          @if (analysisPreviewLoading()) {
+            <p class="small-note">Carregando prévia da saúde financeira...</p>
+          } @else if (!analysisPreviewUrl()) {
+            <p class="small-note">Sem prévia de saúde financeira para este pedido.</p>
+          } @else {
+            <iframe [src]="analysisPreviewUrl()" title="PDF de saúde financeira"></iframe>
+          }
+        </section>
+
+        <section class="decision-pane">
+          <div class="status-block">
+            <p><strong>Status:</strong> {{ statusLabel(order.status) }}</p>
+            <p><strong>Valor:</strong> {{ order.orderValue | currency: 'BRL' }}</p>
+            <p><strong>Saldo aberto:</strong> {{ order.openBalance | currency: 'BRL' }}</p>
+            <p><strong>Limite:</strong> {{ order.creditLimit | currency: 'BRL' }}</p>
+            <p><strong>Excesso:</strong> {{ order.overLimit | currency: 'BRL' }}</p>
+            @if (order.statusReason) {
+              <p><strong>Motivo:</strong> {{ order.statusReason }}</p>
+            }
+          </div>
+
+          <section class="audit-block">
+            <h4>Governança do processo</h4>
+            @if (auditLoading()) {
+              <p>Carregando trilha de auditoria...</p>
+            } @else if (decisionEvents().length === 0) {
+              <p>Sem eventos registrados para este pedido.</p>
+            } @else {
+              <ul class="event-list">
+                @for (event of decisionEvents(); track $index) {
+                  <li>
+                    <p>
+                      <strong>{{ event.eventType }}</strong>
+                      em {{ event.createdAt | date: 'short' }}
+                    </p>
+                    <p>
+                      por {{ event.actorName || 'Sistema' }}
+                      @if (event.message) {
+                        - {{ event.message }}
+                      }
+                    </p>
+                  </li>
+                }
+              </ul>
+            }
+          </section>
+
+          <section class="signature-block">
+            <h4>Assinatura da Isabel</h4>
+            <p>Modo ativo: <strong>{{ signatureMode().toUpperCase() }}</strong></p>
+
+            @if (signatureMode() === 'canvas') {
+              <div class="signature-box">
+                <canvas
+                  #signaturePad
+                  width="520"
+                  height="140"
+                  (pointerdown)="onSignaturePointerDown($event)"
+                  (pointermove)="onSignaturePointerMove($event)"
+                  (pointerup)="onSignaturePointerUp($event)"
+                  (pointerleave)="onSignaturePointerUp($event)"
+                ></canvas>
+              </div>
+              <p class="signature-storage-status">
+                @if (hasSavedSignature()) {
+                  Assinatura salva disponível neste navegador.
+                } @else {
+                  Nenhuma assinatura salva neste navegador.
+                }
+              </p>
+              <div class="actions signature-actions">
+                <button type="button" class="ghost" (click)="clearSignature()">Limpar assinatura</button>
+                <button type="button" class="ghost" [disabled]="!hasSignature()" (click)="saveCurrentSignature()">
+                  Salvar assinatura
+                </button>
+                <button type="button" class="ghost" [disabled]="!hasSavedSignature()" (click)="loadSavedSignature()">
+                  Usar assinatura salva
+                </button>
+                <button
+                  type="button"
+                  class="ghost danger-ghost"
+                  [disabled]="!hasSavedSignature()"
+                  (click)="deleteSavedSignature()"
+                >
+                  Remover assinatura salva
+                </button>
+              </div>
+            } @else {
+              <p>A assinatura será registrada por hash criptográfico com trilha auditável.</p>
+            }
+          </section>
+
+          <section class="return-block" [formGroup]="returnForm">
+            <label>
+              Justificativa de devolução
+              <textarea formControlName="reason" rows="4"></textarea>
+            </label>
+          </section>
+
+          <div class="actions">
+            <button type="button" class="ghost" (click)="downloadManualSignedPreview(order)" [disabled]="manualSigning()">
+              @if (manualSigning()) {
+                Gerando...
+              } @else {
+                Prévia assinada
+              }
+            </button>
+            <button type="button" class="warn" (click)="returnSelectedOrder()" [disabled]="actionLoading()">
+              Devolver para revisão
+            </button>
+            <button type="button" (click)="signSelectedOrder()" [disabled]="actionLoading()">
+              @if (actionLoading()) {
+                Processando...
+              } @else {
+                Assinar e concluir
+              }
+            </button>
+          </div>
+        </section>
+      </div>
+    </article>
+  </section>
+}

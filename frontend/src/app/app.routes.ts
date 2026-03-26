@@ -2,8 +2,10 @@ import { Routes } from '@angular/router';
 import { authGuard } from './core/guards/auth.guard';
 import { guestGuard } from './core/guards/guest.guard';
 import {
+  approvalsAccessGuard,
   financialReceiptsAccessGuard,
-  operationalAccessGuard
+  operationalAccessGuard,
+  statusAccessGuard
 } from './features/pedidos/guards/auth.guard';
 
 export const routes: Routes = [
@@ -61,10 +63,18 @@ export const routes: Routes = [
       },
       {
         path: 'status',
-        canActivate: [operationalAccessGuard],
+        canActivate: [statusAccessGuard],
         loadComponent: () =>
           import('./features/pedidos/pages/status/status.page').then(
             (m) => m.StatusPage
+          )
+      },
+      {
+        path: 'aprovacoes',
+        canActivate: [approvalsAccessGuard],
+        loadComponent: () =>
+          import('./features/pedidos/pages/approvals/approvals.page').then(
+            (m) => m.ApprovalsPage
           )
       },
       {

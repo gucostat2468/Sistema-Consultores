@@ -170,7 +170,7 @@ export class EncaminharModalComponent implements OnChanges {
               ? ` Atenção: ${response.warnings.join(' | ')}`
               : '';
           if (response.credit.approved) {
-            this.successMessage.set(`Pedido encaminhado e aguardando assinatura da Isabel.${warningText}`);
+            this.successMessage.set(`Pedido encaminhado e aguardando assinatura do Diretor Comercial.${warningText}`);
           } else {
             this.successMessage.set(
               `Pedido registrado como NEGADO_SEM_LIMITE e notificado para revisão com Isabel.${warningText}`

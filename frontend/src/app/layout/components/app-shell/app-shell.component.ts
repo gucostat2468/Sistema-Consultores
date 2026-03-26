@@ -50,7 +50,29 @@ export class AppShellComponent {
     const username = String(this.user()?.username || '').trim().toLowerCase();
     return usernames.includes(username);
   });
-  readonly canAccessStatus = computed(() => this.isOperationalUser());
+  readonly isCommercialDirector = computed(() => {
+    const usernames = (
+      (environment as { commercialDirectorUsernames?: string[] }).commercialDirectorUsernames ?? [
+        'marcos',
+        'marcos_dronepro'
+      ]
+    )
+      .map((item) => String(item || '').trim().toLowerCase())
+      .filter(Boolean);
+    const username = String(this.user()?.username || '').trim().toLowerCase();
+    return usernames.includes(username);
+  });
+  readonly isIsabel = computed(() => {
+    const usernames = (
+      (environment as { isabelUsernames?: string[] }).isabelUsernames ?? ['isabel', 'isabel_dronepro']
+    )
+      .map((item) => String(item || '').trim().toLowerCase())
+      .filter(Boolean);
+    const username = String(this.user()?.username || '').trim().toLowerCase();
+    return usernames.includes(username);
+  });
+  readonly canAccessStatus = computed(() => this.isCommercialDirector());
+  readonly canAccessApprovals = computed(() => this.isIsabel());
   readonly canAccessReportUpdate = computed(() => this.isOperationalUser());
   readonly canAccessFinancialReceipts = computed(() => this.isFinancialUser());
   readonly navQueryParams = computed(() => {
@@ -129,6 +151,10 @@ export class AppShellComponent {
     }
     if (url.includes('/status')) {
       this.routeTitle.set('Status');
+      return;
+    }
+    if (url.includes('/aprovacoes')) {
+      this.routeTitle.set('Aprovacoes');
       return;
     }
     if (url.includes('/comprovantes-financeiros')) {

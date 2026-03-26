@@ -146,6 +146,44 @@ OPERATIONAL_USERNAMES = {
     if username
 }
 
+DEFAULT_ISABEL_USERNAMES = {
+    "isabel",
+    "isabel_dronepro",
+}
+EXTRA_ISABEL_USERNAMES = {
+    str(item or "").strip().lower()
+    for item in os.getenv("ISABEL_USERNAMES", "").split(",")
+    if str(item or "").strip()
+}
+ISABEL_USERNAMES = {
+    username
+    for username in (
+        DEFAULT_ISABEL_USERNAMES
+        | EXTRA_ISABEL_USERNAMES
+        | {ISABEL_USERNAME}
+    )
+    if username
+}
+
+DEFAULT_COMMERCIAL_DIRECTOR_USERNAMES = {
+    "marcos",
+    "marcos_dronepro",
+}
+EXTRA_COMMERCIAL_DIRECTOR_USERNAMES = {
+    str(item or "").strip().lower()
+    for item in os.getenv("COMMERCIAL_DIRECTOR_USERNAMES", "").split(",")
+    if str(item or "").strip()
+}
+COMMERCIAL_DIRECTOR_USERNAMES = {
+    username
+    for username in (
+        DEFAULT_COMMERCIAL_DIRECTOR_USERNAMES
+        | EXTRA_COMMERCIAL_DIRECTOR_USERNAMES
+        | {MARCOS_USERNAME}
+    )
+    if username
+}
+
 DEFAULT_FINANCIAL_USERNAMES = {
     "vitor_financeiro",
 }
@@ -186,6 +224,8 @@ SMTP_FALLBACK_HOSTS = [
 ]
 SMTP_FROM = os.getenv("SMTP_FROM", "no-reply@dronepro.local").strip()
 
+ORDER_STATUS_LEGACY_AWAITING_FINANCIAL_SIGNATURE = "AGUARDANDO_ASSINATURA_DIRETOR_FINANCEIRO"
+ORDER_STATUS_AWAITING_COMMERCIAL_SIGNATURE = "AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL"
 ORDER_STATUS_AWAITING_SIGNATURE = "AGUARDANDO_ASSINATURA_ISABEL"
 ORDER_STATUS_NEGATIVE = "NEGADO_SEM_LIMITE"
 ORDER_STATUS_RETURNED = "DEVOLVIDO_REVISAO"
@@ -194,6 +234,7 @@ ORDER_STATUS_DONE = "CONCLUIDO"
 ORDER_STATUS_BILLED = "FATURADO"
 ORDER_STATUS_DELETED = "EXCLUIDO"
 ORDER_STATUS_ALL = {
+    ORDER_STATUS_AWAITING_COMMERCIAL_SIGNATURE,
     ORDER_STATUS_AWAITING_SIGNATURE,
     ORDER_STATUS_NEGATIVE,
     ORDER_STATUS_RETURNED,
@@ -449,6 +490,14 @@ def is_financial_username(username: str | None) -> bool:
     return str(username or "").strip().lower() in FINANCIAL_USERNAMES
 
 
+def is_commercial_director_username(username: str | None) -> bool:
+    return str(username or "").strip().lower() in COMMERCIAL_DIRECTOR_USERNAMES
+
+
+def is_isabel_username(username: str | None) -> bool:
+    return str(username or "").strip().lower() in ISABEL_USERNAMES
+
+
 def ensure_operational_user(user: AuthenticatedUser) -> None:
     if is_operational_username(user.username):
         return
@@ -456,12 +505,18 @@ def ensure_operational_user(user: AuthenticatedUser) -> None:
 
 
 def ensure_isabel(user: AuthenticatedUser) -> None:
-    if user.username.strip().lower() != ISABEL_USERNAME:
+    if not is_isabel_username(user.username):
         raise HTTPException(status_code=403, detail="Acesso exclusivo da Isabel.")
 
 
 def ensure_status_access(user: AuthenticatedUser) -> None:
     ensure_operational_user(user)
+
+
+def ensure_commercial_signature_user(user: AuthenticatedUser) -> None:
+    if is_commercial_director_username(user.username):
+        return
+    raise HTTPException(status_code=403, detail="Assinatura desta etapa e exclusiva do diretor comercial.")
 
 
 def ensure_financial_receipts_access(user: AuthenticatedUser) -> None:
@@ -1345,9 +1400,70 @@ def send_email_with_optional_pdf(
     return False, " | ".join(errors[-4:])
 
 
+def safe_json_dict(raw_value: str | None) -> dict:
+    if not raw_value:
+        return {}
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError:
+        return {}
+    if isinstance(parsed, dict):
+        return parsed
+    return {}
+
+
+def normalize_order_distribution(raw_value: str | None) -> dict:
+    payload = safe_json_dict(raw_value)
+    approvals_raw = payload.get("approvals")
+    notifications_raw = payload.get("notifications")
+    approvals = [item for item in approvals_raw if isinstance(item, dict)] if isinstance(approvals_raw, list) else []
+    notifications = (
+        [item for item in notifications_raw if isinstance(item, dict)]
+        if isinstance(notifications_raw, list)
+        else []
+    )
+    payload["approvals"] = approvals
+    payload["notifications"] = notifications
+    return payload
+
+
+def status_stage_label(status: str) -> str:
+    if status == ORDER_STATUS_LEGACY_AWAITING_FINANCIAL_SIGNATURE:
+        return "Diretor Comercial"
+    if status == ORDER_STATUS_AWAITING_COMMERCIAL_SIGNATURE:
+        return "Diretor Comercial"
+    if status == ORDER_STATUS_AWAITING_SIGNATURE:
+        return "Isabel"
+    if status == ORDER_STATUS_BILLED:
+        return "Faturado"
+    if status == ORDER_STATUS_DONE:
+        return "Concluido"
+    return status
+
+
+def next_status_for_signature(status: str) -> str | None:
+    if status == ORDER_STATUS_AWAITING_COMMERCIAL_SIGNATURE:
+        return ORDER_STATUS_AWAITING_SIGNATURE
+    if status == ORDER_STATUS_AWAITING_SIGNATURE:
+        return ORDER_STATUS_DONE
+    if status == ORDER_STATUS_LEGACY_AWAITING_FINANCIAL_SIGNATURE:
+        return ORDER_STATUS_AWAITING_SIGNATURE
+    return None
+
+
+def format_signed_at_for_pdf(signed_at_iso: str | None) -> str:
+    if not signed_at_iso:
+        return "-"
+    try:
+        parsed = datetime.fromisoformat(str(signed_at_iso).replace("Z", "+00:00"))
+        return parsed.astimezone(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+    except ValueError:
+        return str(signed_at_iso)
+
+
 def serialize_order_row(row: dict) -> dict:
-    extracted = json.loads(row.get("extracted_json") or "{}")
-    distribution = json.loads(row.get("distribution_json") or "{}")
+    extracted = safe_json_dict(row.get("extracted_json"))
+    distribution = normalize_order_distribution(row.get("distribution_json"))
     return {
         "id": int(row["id"]),
         "externalId": row["external_id"],
@@ -1811,17 +1927,16 @@ def build_signature_overlay(
     order_number: str,
     customer_name: str,
     order_value_cents: int,
-    signed_by_name: str,
-    signed_at_iso: str,
-    signature_mode: str,
-    signature_hash: str,
+    approvals: list[dict],
     signature_canvas_bytes: bytes | None,
 ):
     packet = BytesIO()
     drawing = canvas.Canvas(packet, pagesize=(page_width, page_height))
 
     margin = 28
-    box_height = 138
+    display_approvals = approvals[-3:] if approvals else []
+    box_height = max(150, 96 + (len(display_approvals) * 28))
+    box_height = min(box_height, int(page_height - 40))
     y = 22
     drawing.setStrokeColorRGB(0.16, 0.34, 0.31)
     drawing.setFillColorRGB(0.94, 0.98, 0.95)
@@ -1829,29 +1944,72 @@ def build_signature_overlay(
 
     drawing.setFillColorRGB(0.08, 0.30, 0.20)
     drawing.setFont("Helvetica-Bold", 11)
-    drawing.drawString(margin + 12, y + 114, "APROVADO DIGITALMENTE")
+    drawing.drawString(margin + 12, y + box_height - 20, "APROVADO DIGITALMENTE - ESTEIRA DE ASSINATURAS")
 
     drawing.setFillColorRGB(0.15, 0.15, 0.15)
     drawing.setFont("Helvetica", 9)
-    drawing.drawString(margin + 12, y + 98, f"Pedido: {order_number}")
-    drawing.drawString(margin + 12, y + 84, f"Cliente: {customer_name}")
-    drawing.drawString(margin + 12, y + 70, f"Valor: R$ {cents_to_brl(order_value_cents):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-    drawing.drawString(margin + 12, y + 56, f"Assinado por: {signed_by_name}")
-    drawing.drawString(margin + 12, y + 42, f"Data/Hora UTC: {signed_at_iso}")
-    drawing.drawString(margin + 12, y + 28, f"Modo: {signature_mode.upper()}")
-    drawing.drawString(margin + 12, y + 14, f"Hash: {signature_hash[:36]}...")
+    header_y = y + box_height - 36
+    drawing.drawString(margin + 12, header_y, f"Pedido: {order_number}")
+    drawing.drawString(margin + 12, header_y - 14, f"Cliente: {customer_name}")
+    drawing.drawString(
+        margin + 12,
+        header_y - 28,
+        f"Valor: R$ {cents_to_brl(order_value_cents):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+    )
 
-    if signature_mode == "canvas" and signature_canvas_bytes:
-        image = ImageReader(BytesIO(signature_canvas_bytes))
+    line_y = header_y - 48
+    drawing.setFont("Helvetica-Bold", 8.6)
+    drawing.drawString(margin + 12, line_y, "Assinaturas registradas:")
+    line_y -= 12
+    for index, approval in enumerate(display_approvals):
+        role_label = str(approval.get("roleLabel") or approval.get("stageLabel") or "Responsavel")
+        signed_by_name = str(approval.get("signedByName") or approval.get("actorName") or "-")
+        signature_mode = str(approval.get("signatureMode") or "-").upper()
+        signed_at_iso = str(approval.get("signedAt") or "")
+        signature_hash = str(approval.get("signatureHash") or "-")
+        hash_preview = f"{signature_hash[:18]}..." if signature_hash and signature_hash != "-" else "-"
+        drawing.setFont("Helvetica-Bold", 8.4)
+        drawing.drawString(margin + 12, line_y, f"{index + 1}. {role_label}: {signed_by_name}")
+        drawing.setFont("Helvetica", 8)
+        drawing.drawString(
+            margin + 16,
+            line_y - 10,
+            f"{format_signed_at_for_pdf(signed_at_iso)} | {signature_mode} | hash {hash_preview}",
+        )
+        line_y -= 24
+
+    signature_samples: list[tuple[str, bytes]] = []
+    for approval in reversed(display_approvals):
+        canvas_path_raw = str(approval.get("signatureCanvasPath") or "").strip()
+        if not canvas_path_raw:
+            continue
+        canvas_path = Path(canvas_path_raw)
+        if not canvas_path.exists():
+            continue
+        try:
+            signature_samples.append((str(approval.get("roleLabel") or "Assinatura"), canvas_path.read_bytes()))
+        except OSError:
+            continue
+        if len(signature_samples) >= 2:
+            break
+    if not signature_samples and signature_canvas_bytes:
+        signature_samples.append(("Assinatura", signature_canvas_bytes))
+
+    sample_y = y + 18
+    for role_label, sample_bytes in signature_samples:
+        image = ImageReader(BytesIO(sample_bytes))
         drawing.drawImage(
             image,
             page_width - 218,
-            y + 18,
+            sample_y,
             width=168,
-            height=64,
+            height=48,
             preserveAspectRatio=True,
             mask="auto",
         )
+        drawing.setFont("Helvetica", 7.2)
+        drawing.drawString(page_width - 218, sample_y - 8, role_label[:30])
+        sample_y += 58
 
     drawing.save()
     packet.seek(0)
@@ -1868,6 +2026,9 @@ def generate_signed_order_pdf(
     order_value_cents: int,
     signed_by_name: str,
     signature_mode: str,
+    signed_at_iso: str | None = None,
+    signature_hash: str | None = None,
+    approvals: list[dict] | None = None,
 ) -> tuple[str, int]:
     if not original_pdf_path.exists():
         raise HTTPException(status_code=404, detail="PDF original do pedido nao encontrado.")
@@ -1877,13 +2038,22 @@ def generate_signed_order_pdf(
         raise HTTPException(status_code=400, detail="PDF do pedido sem paginas.")
 
     original_bytes = original_pdf_path.read_bytes()
-    signed_at_iso = utc_now_iso()
-    signature_hash = hash_order_signature(
+    resolved_signed_at_iso = signed_at_iso or utc_now_iso()
+    resolved_signature_hash = signature_hash or hash_order_signature(
         pdf_bytes=original_bytes,
         order_number=order_number,
         signed_by=signed_by_name,
-        signed_at_iso=signed_at_iso,
+        signed_at_iso=resolved_signed_at_iso,
     )
+    resolved_approvals = approvals or [
+        {
+            "roleLabel": "Assinatura digital",
+            "signedByName": signed_by_name,
+            "signedAt": resolved_signed_at_iso,
+            "signatureMode": signature_mode,
+            "signatureHash": resolved_signature_hash,
+        }
+    ]
 
     signature_canvas_bytes = signature_image_path.read_bytes() if signature_image_path else None
 
@@ -1896,10 +2066,7 @@ def generate_signed_order_pdf(
                 order_number=order_number,
                 customer_name=customer_name,
                 order_value_cents=order_value_cents,
-                signed_by_name=signed_by_name,
-                signed_at_iso=signed_at_iso,
-                signature_mode=signature_mode,
-                signature_hash=signature_hash,
+                approvals=resolved_approvals,
                 signature_canvas_bytes=signature_canvas_bytes,
             )
             page.merge_page(overlay)
@@ -1914,7 +2081,7 @@ def generate_signed_order_pdf(
         signed_pdf_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="PDF final excede 10MB.")
 
-    return signature_hash, size
+    return resolved_signature_hash, size
 
 
 app = FastAPI(title="DronePro API", version="1.0.0")
@@ -2059,10 +2226,35 @@ def ensure_bootstrap_vitor_financeiro_user() -> None:
     )
 
 
+def migrate_legacy_order_signature_status() -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE order_requests
+            SET
+                status = ?,
+                status_reason = CASE
+                    WHEN COALESCE(status_reason, '') = '' THEN ?
+                    ELSE status_reason
+                END,
+                updated_at = ?
+            WHERE status = ?
+            """,
+            (
+                ORDER_STATUS_AWAITING_COMMERCIAL_SIGNATURE,
+                "Fluxo atualizado: aguardando assinatura do Diretor Comercial.",
+                utc_now_iso(),
+                ORDER_STATUS_LEGACY_AWAITING_FINANCIAL_SIGNATURE,
+            ),
+        )
+        conn.commit()
+
+
 init_db()
 ensure_bootstrap_admin()
 ensure_bootstrap_isabel_and_marcos_admins()
 ensure_bootstrap_vitor_financeiro_user()
+migrate_legacy_order_signature_status()
 
 
 @app.get("/api/health")
@@ -2918,9 +3110,12 @@ def ensure_order_access(user: AuthenticatedUser, order_row: dict) -> None:
     if is_operational_username(user.username):
         return
     if is_financial_username(user.username):
-        if order_row["status"] in {ORDER_STATUS_SIGNED_DISTRIBUTING, ORDER_STATUS_DONE, ORDER_STATUS_BILLED}:
+        if order_row["status"] != ORDER_STATUS_DELETED:
             return
-        raise HTTPException(status_code=403, detail="Perfil financeiro acessa apenas comprovantes finalizados.")
+        raise HTTPException(
+            status_code=403,
+            detail="Perfil financeiro nao acessa pedidos excluidos.",
+        )
     if int(order_row["requested_by_user_id"]) == int(user.id):
         return
     if int(order_row["consultant_id"]) == int(user.id):
@@ -3025,7 +3220,7 @@ async def pedidos_encaminhar(
         canonical_resolved_name = str(credit_snapshot.get("canonicalName") or "").strip()
         if canonical_resolved_name:
             resolved_customer_name = canonical_resolved_name
-        status = ORDER_STATUS_AWAITING_SIGNATURE if credit_snapshot["approved"] else ORDER_STATUS_NEGATIVE
+        status = ORDER_STATUS_AWAITING_COMMERCIAL_SIGNATURE if credit_snapshot["approved"] else ORDER_STATUS_NEGATIVE
         status_reason = credit_snapshot["reason"]
 
         analysis_pdf_path: Path | None = None
@@ -3131,16 +3326,17 @@ async def pedidos_encaminhar(
         )
 
         notifications: list[dict] = []
-        if status == ORDER_STATUS_AWAITING_SIGNATURE:
-            recipients = split_email_targets(config["isabel_emails"])
+        if status == ORDER_STATUS_AWAITING_COMMERCIAL_SIGNATURE:
+            recipients = split_email_targets(config["marcos_emails"])
             routed_recipients: list[str] = []
             for recipient in recipients:
                 subject = f"[Aprovacao pendente] Pedido {resolved_order_number} - {resolved_customer_name}"
                 body = (
-                    "Pedido encaminhado para assinatura digital.\n\n"
+                    "Pedido encaminhado para assinatura do Diretor Comercial.\n\n"
                     f"Pedido: {resolved_order_number}\n"
                     f"Cliente: {resolved_customer_name}\n"
                     f"Valor: R$ {cents_to_brl(order_value_cents):,.2f}\n"
+                    f"Etapa atual: {status_stage_label(status)}\n"
                     f"Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
                     f"Painel de Status: {ORDER_APPROVAL_PANEL_URL}\n"
                 )
@@ -3177,7 +3373,7 @@ async def pedidos_encaminhar(
                     f"Pedido: {resolved_order_number}\n"
                     f"Cliente: {resolved_customer_name}\n"
                     f"Valor: R$ {cents_to_brl(order_value_cents):,.2f}\n"
-                    f"Status atual: {status}\n\n"
+                    f"Status atual: {status_stage_label(status)}\n\n"
                     f"Painel de Status: {ORDER_APPROVAL_PANEL_URL}\n"
                 )
                 success, error_message = send_email_with_optional_pdf(
@@ -3211,7 +3407,7 @@ async def pedidos_encaminhar(
                 actor_name=user.name,
                 from_status=status,
                 to_status=status,
-                message="Pedido roteado para assinatura da Isabel.",
+                message="Pedido roteado para assinatura do Diretor Comercial.",
                 payload={
                     "recipients": recipients,
                     "manualRecipients": manual_forwarded,
@@ -3470,8 +3666,17 @@ def pedidos_resumo(
         )
         pending = int(
             conn.execute(
-                "SELECT COUNT(*) FROM order_requests WHERE status = ? AND status <> ?",
-                (ORDER_STATUS_AWAITING_SIGNATURE, ORDER_STATUS_DELETED),
+                """
+                SELECT COUNT(*)
+                FROM order_requests
+                WHERE status IN (?, ?)
+                  AND status <> ?
+                """,
+                (
+                    ORDER_STATUS_AWAITING_COMMERCIAL_SIGNATURE,
+                    ORDER_STATUS_AWAITING_SIGNATURE,
+                    ORDER_STATUS_DELETED,
+                ),
             ).fetchone()[0]
         )
         negative = int(
@@ -3586,104 +3791,94 @@ def pedidos_assinar(
     authorization: str | None = Header(default=None),
 ) -> dict:
     user = get_current_user_from_header(authorization)
-    ensure_operational_user(user)
-
     signature_mode = str(payload.get("signatureMode") or ORDER_SIGNATURE_MODE).strip().lower()
     if signature_mode not in {"canvas", "hash"}:
         raise HTTPException(status_code=400, detail="Modo de assinatura invalido.")
 
     canvas_payload = payload.get("signatureCanvasBase64")
     signature_canvas_bytes = decode_canvas_signature(canvas_payload)
-    signature_image_path: Path | None = None
     if signature_mode == "canvas":
         if not signature_canvas_bytes:
             raise HTTPException(status_code=400, detail="Assinatura manuscrita obrigatoria no modo canvas.")
-        signature_image_path = ORDER_SIGNATURE_DIR / f"{order_id}.png"
-        signature_image_path.write_bytes(signature_canvas_bytes)
-
     with get_connection() as conn:
         order_row = fetch_order_row_or_404(conn, order_id)
-        if order_row["status"] != ORDER_STATUS_AWAITING_SIGNATURE:
-            raise HTTPException(status_code=409, detail="Pedido nao esta aguardando assinatura.")
+        current_status = str(order_row["status"] or "").strip()
+        if current_status == ORDER_STATUS_LEGACY_AWAITING_FINANCIAL_SIGNATURE:
+            current_status = ORDER_STATUS_AWAITING_COMMERCIAL_SIGNATURE
+        next_status = next_status_for_signature(current_status)
+        if not next_status:
+            raise HTTPException(status_code=409, detail="Pedido nao esta em etapa de assinatura.")
 
-        original_pdf_path = Path(order_row["original_pdf_path"])
-        signed_pdf_path = ORDER_SIGNED_DIR / f"{order_row['external_id']}-signed.pdf"
-        signature_hash, final_size = generate_signed_order_pdf(
-            original_pdf_path=original_pdf_path,
-            signed_pdf_path=signed_pdf_path,
-            signature_image_path=signature_image_path,
-            order_number=order_row["order_number"],
-            customer_name=order_row["customer_name"],
-            order_value_cents=int(order_row["order_value_cents"]),
-            signed_by_name=user.name,
-            signature_mode=signature_mode,
+        stage_code = ""
+        stage_label = ""
+        next_label = status_stage_label(next_status) if next_status else ""
+        if current_status == ORDER_STATUS_AWAITING_COMMERCIAL_SIGNATURE:
+            ensure_commercial_signature_user(user)
+            stage_code = "comercial"
+            stage_label = "Diretor Comercial"
+        elif current_status == ORDER_STATUS_AWAITING_SIGNATURE:
+            ensure_isabel(user)
+            stage_code = "isabel"
+            stage_label = "Isabel"
+        else:
+            raise HTTPException(status_code=409, detail="Pedido nao esta em etapa valida de assinatura.")
+
+        signature_image_path: Path | None = None
+        if signature_mode == "canvas":
+            signature_image_path = ORDER_SIGNATURE_DIR / f"{order_id}-{stage_code}-{uuid.uuid4().hex[:8]}.png"
+            signature_image_path.write_bytes(signature_canvas_bytes or b"")
+
+        source_pdf_path = Path(order_row["signed_pdf_path"]) if order_row.get("signed_pdf_path") else None
+        if source_pdf_path is None or not source_pdf_path.exists():
+            source_pdf_path = Path(order_row["original_pdf_path"])
+        if not source_pdf_path.exists():
+            raise HTTPException(status_code=404, detail="PDF base do pedido nao encontrado para assinatura.")
+
+        signed_at_iso = utc_now_iso()
+        signature_hash = hash_order_signature(
+            pdf_bytes=source_pdf_path.read_bytes(),
+            order_number=str(order_row["order_number"]),
+            signed_by=f"{stage_label}:{user.name}",
+            signed_at_iso=signed_at_iso,
         )
 
-        now_iso = utc_now_iso()
-        conn.execute(
-            """
-            UPDATE order_requests
-            SET
-                status = ?,
-                signed_pdf_path = ?,
-                signature_mode = ?,
-                signature_hash = ?,
-                signature_canvas_path = ?,
-                signed_by_user_id = ?,
-                signed_at = ?,
-                updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                ORDER_STATUS_SIGNED_DISTRIBUTING,
-                signed_pdf_path.as_posix(),
-                signature_mode,
-                signature_hash,
-                signature_image_path.as_posix() if signature_image_path else None,
-                int(user.id),
-                now_iso,
-                now_iso,
-                int(order_id),
-            ),
-        )
-        record_order_event(
-            conn,
-            order_request_id=order_id,
-            event_type="SIGNED",
-            actor_user_id=int(user.id),
-            actor_name=user.name,
-            from_status=order_row["status"],
-            to_status=ORDER_STATUS_SIGNED_DISTRIBUTING,
-            message=f"Pedido assinado digitalmente por {user.name}.",
-            payload={
-                "signatureMode": signature_mode,
-                "signedPdfSizeBytes": final_size,
-            },
-        )
+        distribution = normalize_order_distribution(order_row.get("distribution_json"))
+        approvals = list(distribution.get("approvals") or [])
+        notifications = list(distribution.get("notifications") or [])
+        approval_entry = {
+            "stage": stage_code,
+            "stageLabel": stage_label,
+            "roleLabel": stage_label,
+            "signedByUserId": int(user.id),
+            "signedByName": user.name,
+            "signedAt": signed_at_iso,
+            "signatureMode": signature_mode,
+            "signatureHash": signature_hash,
+            "signatureCanvasPath": signature_image_path.as_posix() if signature_image_path else None,
+        }
+        approvals.append(approval_entry)
+        distribution["approvals"] = approvals
 
         config = ensure_order_email_config(conn)
-        notifications: list[dict] = []
-        requester_email = get_requester_email(conn, int(order_row["requested_by_user_id"]))
+        failed_notifications = 0
+        final_size = 0
+        signed_pdf_path: Path | None = None
+        final_status = next_status
+        stage_message = f"Assinado por {stage_label}. Aguardando {next_label}."
 
-        vitor_targets = split_email_targets(config["vitor_emails"])
-        marcos_targets = split_email_targets(config["marcos_emails"])
-        isabel_targets = split_email_targets(config["isabel_emails"])
-        if user.email:
-            isabel_targets.extend(split_email_targets(user.email))
+        package_pdf_path = Path(order_row["package_pdf_path"]) if order_row.get("package_pdf_path") else None
+        stage_attachment = package_pdf_path if package_pdf_path and package_pdf_path.exists() else Path(
+            order_row["original_pdf_path"]
+        )
 
-        via3_targets = marcos_targets.copy()
-        if requester_email:
-            via3_targets.append(requester_email)
-        via3_targets = list(dict.fromkeys(via3_targets))
-        isabel_targets = list(dict.fromkeys(isabel_targets))
-
-        def send_and_log(kind: str, recipients: list[str], subject: str, body: str) -> None:
+        def send_and_log(kind: str, recipients: list[str], subject: str, body: str, pdf_path: Path | None) -> None:
+            nonlocal failed_notifications
             for recipient in recipients:
                 success, error_message = send_email_with_optional_pdf(
                     recipient=recipient,
                     subject=subject,
                     body=body,
-                    pdf_path=signed_pdf_path,
+                    pdf_path=pdf_path,
                 )
                 notifications.append(
                     {
@@ -3693,6 +3888,8 @@ def pedidos_assinar(
                         "error": error_message,
                     }
                 )
+                if not success:
+                    failed_notifications += 1
                 record_order_email_log(
                     conn,
                     order_request_id=order_id,
@@ -3703,80 +3900,157 @@ def pedidos_assinar(
                     error_message=error_message,
                 )
 
-        common_body = (
-            f"Pedido: {order_row['order_number']}\n"
-            f"Cliente: {order_row['customer_name']}\n"
-            f"Valor: R$ {cents_to_brl(int(order_row['order_value_cents'])):,.2f}\n"
-            f"Data assinatura: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n"
-        )
-        send_and_log(
-            "via1_vitor",
-            vitor_targets,
-            f"[Via 1/4] Pedido aprovado {order_row['order_number']}",
-            "Primeira via digital do pedido aprovado.\n\n" + common_body,
-        )
-        send_and_log(
-            "via2_vitor",
-            vitor_targets,
-            f"[Via 2/4] Confirmacao pedido {order_row['order_number']}",
-            "Segunda via digital para confirmacao de recebimento.\n\n" + common_body,
-        )
-        send_and_log(
-            "via3_marcos_admin",
-            via3_targets,
-            f"[Via 3/4] Pedido aprovado {order_row['order_number']}",
-            "Terceira via digital destinada a Marcos e administrador iniciador.\n\n" + common_body,
-        )
-        send_and_log(
-            "via4_isabel",
-            isabel_targets,
-            f"[Via 4/4] Confirmacao assinatura {order_row['order_number']}",
-            "Quarta via: confirmacao de registro da assinatura digital.\n\n" + common_body,
-        )
+        if current_status == ORDER_STATUS_AWAITING_COMMERCIAL_SIGNATURE:
+            recipients = split_email_targets(config.get("isabel_emails"))
+            send_and_log(
+                "request_isabel_signature",
+                recipients,
+                f"[Esteira assinatura] Isabel - Pedido {order_row['order_number']}",
+                (
+                    "Diretor Comercial concluiu a assinatura. Pedido segue para assinatura final da Isabel.\n\n"
+                    f"Pedido: {order_row['order_number']}\n"
+                    f"Cliente: {order_row['customer_name']}\n"
+                    f"Valor: R$ {cents_to_brl(int(order_row['order_value_cents'])):,.2f}\n"
+                    f"Proxima etapa: {status_stage_label(ORDER_STATUS_AWAITING_SIGNATURE)}\n\n"
+                    f"Painel de Status: {ORDER_APPROVAL_PANEL_URL}\n"
+                ),
+                stage_attachment if stage_attachment.exists() else None,
+            )
+        else:
+            original_pdf_path = Path(order_row["original_pdf_path"])
+            signed_pdf_path = ORDER_SIGNED_DIR / f"{order_row['external_id']}-signed.pdf"
+            _, final_size = generate_signed_order_pdf(
+                original_pdf_path=original_pdf_path,
+                signed_pdf_path=signed_pdf_path,
+                signature_image_path=signature_image_path,
+                order_number=order_row["order_number"],
+                customer_name=order_row["customer_name"],
+                order_value_cents=int(order_row["order_value_cents"]),
+                signed_by_name=user.name,
+                signature_mode=signature_mode,
+                signed_at_iso=signed_at_iso,
+                signature_hash=signature_hash,
+                approvals=approvals,
+            )
 
-        failed = [item for item in notifications if not item["success"]]
-        finish_reason = (
-            "Concluido com falhas em parte dos envios de e-mail."
-            if failed
-            else "Concluido com distribuicao digital completa."
-        )
+            requester_email = get_requester_email(conn, int(order_row["requested_by_user_id"]))
+            vitor_targets = split_email_targets(config.get("vitor_emails"))
+            marcos_targets = split_email_targets(config.get("marcos_emails"))
+            isabel_targets = split_email_targets(config.get("isabel_emails"))
+            if user.email:
+                isabel_targets.extend(split_email_targets(user.email))
+
+            via3_targets = marcos_targets.copy()
+            if requester_email:
+                via3_targets.append(requester_email)
+            via3_targets = list(dict.fromkeys(via3_targets))
+            isabel_targets = list(dict.fromkeys(isabel_targets))
+
+            common_body = (
+                "Pedido finalizado com assinatura em esteira.\n\n"
+                f"Pedido: {order_row['order_number']}\n"
+                f"Cliente: {order_row['customer_name']}\n"
+                f"Valor: R$ {cents_to_brl(int(order_row['order_value_cents'])):,.2f}\n"
+                f"Finalizado por: {user.name}\n"
+                f"Data assinatura final: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n"
+            )
+            send_and_log(
+                "via1_vitor",
+                vitor_targets,
+                f"[Via 1/4] Pedido finalizado {order_row['order_number']}",
+                "Primeira via digital do pedido finalizado.\n\n" + common_body,
+                signed_pdf_path,
+            )
+            send_and_log(
+                "via2_vitor",
+                vitor_targets,
+                f"[Via 2/4] Confirmacao pedido {order_row['order_number']}",
+                "Segunda via digital para confirmacao de recebimento.\n\n" + common_body,
+                signed_pdf_path,
+            )
+            send_and_log(
+                "via3_marcos_admin",
+                via3_targets,
+                f"[Via 3/4] Pedido finalizado {order_row['order_number']}",
+                "Terceira via digital destinada a Marcos e administrador iniciador.\n\n" + common_body,
+                signed_pdf_path,
+            )
+            send_and_log(
+                "via4_isabel",
+                isabel_targets,
+                f"[Via 4/4] Confirmacao assinatura {order_row['order_number']}",
+                "Quarta via: confirmacao do fechamento digital do pedido.\n\n" + common_body,
+                signed_pdf_path,
+            )
+
+            final_status = ORDER_STATUS_DONE
+            stage_message = (
+                "Pedido finalizado com todas as assinaturas e concluido para faturamento."
+                if failed_notifications == 0
+                else "Pedido concluido para faturamento, com falhas parciais no envio de e-mails."
+            )
+
+        distribution["notifications"] = notifications
+        now_iso = utc_now_iso()
         conn.execute(
             """
             UPDATE order_requests
             SET
                 status = ?,
                 status_reason = ?,
+                signed_pdf_path = ?,
+                signature_mode = ?,
+                signature_hash = ?,
+                signature_canvas_path = ?,
+                signed_by_user_id = ?,
+                signed_at = ?,
                 distribution_json = ?,
                 updated_at = ?
             WHERE id = ?
             """,
             (
-                ORDER_STATUS_DONE,
-                finish_reason,
-                json.dumps({"notifications": notifications}, ensure_ascii=False),
-                utc_now_iso(),
+                final_status,
+                stage_message,
+                signed_pdf_path.as_posix() if signed_pdf_path else order_row.get("signed_pdf_path"),
+                signature_mode,
+                signature_hash,
+                signature_image_path.as_posix() if signature_image_path else None,
+                int(user.id),
+                signed_at_iso,
+                json.dumps(distribution, ensure_ascii=False),
+                now_iso,
                 int(order_id),
             ),
         )
         record_order_event(
             conn,
             order_request_id=order_id,
-            event_type="DISTRIBUTED",
+            event_type="SIGNED_STAGE",
             actor_user_id=int(user.id),
             actor_name=user.name,
-            from_status=ORDER_STATUS_SIGNED_DISTRIBUTING,
-            to_status=ORDER_STATUS_DONE,
-            message=finish_reason,
-            payload={"failedCount": len(failed)},
+            from_status=current_status,
+            to_status=final_status,
+            message=stage_message,
+            payload={
+                "stage": stage_code,
+                "stageLabel": stage_label,
+                "nextStage": status_stage_label(final_status),
+                "signatureMode": signature_mode,
+                "signedPdfSizeBytes": final_size if final_size > 0 else None,
+                "failedEmailCount": failed_notifications,
+            },
         )
         conn.commit()
-        done_row = fetch_order_row_or_404(conn, order_id)
+        updated_row = fetch_order_row_or_404(conn, order_id)
 
     return {
-        "order": serialize_order_row(done_row),
+        "order": serialize_order_row(updated_row),
         "downloadUrl": f"/api/pedidos/{order_id}/download",
         "signatureMode": signature_mode,
-        "failedEmails": len(failed),
+        "failedEmails": failed_notifications,
+        "billed": False,
+        "nextStatus": updated_row["status"],
+        "nextStageLabel": status_stage_label(updated_row["status"]),
     }
 
 
@@ -3787,21 +4061,16 @@ def pedidos_assinar_concluir(
     authorization: str | None = Header(default=None),
 ) -> dict:
     sign_result = pedidos_assinar(order_id=order_id, payload=payload, authorization=authorization)
-    billing_note_raw = str(payload.get("billingNote") or "").strip()
-    auto_note = "Baixa automatica apos assinatura e aprovacao digital."
-    billing_note = f"{auto_note} Obs: {billing_note_raw}" if billing_note_raw else auto_note
-    billed_result = pedidos_faturar(
-        order_id=order_id,
-        payload={"note": billing_note},
-        authorization=authorization,
-    )
+    billed = bool(sign_result.get("billed"))
 
     return {
-        "order": billed_result["order"],
+        "order": sign_result.get("order"),
         "downloadUrl": sign_result.get("downloadUrl"),
         "signatureMode": sign_result.get("signatureMode"),
         "failedEmails": int(sign_result.get("failedEmails") or 0),
-        "billed": True,
+        "billed": billed,
+        "nextStatus": sign_result.get("nextStatus"),
+        "nextStageLabel": sign_result.get("nextStageLabel"),
     }
 
 

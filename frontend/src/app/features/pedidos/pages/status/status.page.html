@@ -5,7 +5,8 @@
 } @else {
   <section class="card intro">
     <h2>Status de Aprovação Digital</h2>
-    <p>Fluxo unificado de pedidos: encaminhamento, assinatura da Isabel, negativas de limite e distribuição das vias.</p>
+    <p>Fila da assinatura do Diretor Comercial antes de seguir para a sessão Aprovações da Isabel.</p>
+    <p>Atualização automática em tempo real para manter o fluxo em esteira sem bloqueios.</p>
   </section>
 
   <section class="summary-grid">
@@ -15,7 +16,7 @@
     </article>
     <article class="card summary-card">
       <p>Pendentes assinatura</p>
-      <strong>{{ summary().pendingSignature }}</strong>
+      <strong>{{ pendingItems().length }}</strong>
     </article>
     <article class="card summary-card">
       <p>Negados sem limite</p>
@@ -46,7 +47,7 @@
           Status
           <select formControlName="status">
             <option value="">Todos</option>
-            <option value="AGUARDANDO_ASSINATURA_ISABEL">Aguardando assinatura</option>
+            <option value="AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL">Aguardando Diretor Comercial</option>
             <option value="NEGADO_SEM_LIMITE">Negado sem limite</option>
             <option value="DEVOLVIDO_REVISAO">Devolvido revisão</option>
             <option value="ASSINADO_AGUARDANDO_DISTRIBUICAO">Assinado distribuindo</option>
@@ -131,11 +132,11 @@
                 <td>{{ item.customerName }}</td>
                 <td>{{ item.orderValue | currency: 'BRL' }}</td>
                 <td>{{ item.consultantName || '-' }}</td>
-                <td>{{ item.status }}</td>
+                <td>{{ statusLabel(item.status) }}</td>
                 <td>
                   <div class="row-actions">
                     <button type="button" (click)="openDecisionModal(item)">
-                      {{ isIsabel() ? 'Assinar / Devolver' : 'Visualizar' }}
+                      {{ canSignOrder(item) ? 'Assinar etapa' : 'Visualizar' }}
                     </button>
                     @if (canDelete(item)) {
                       <button
@@ -185,7 +186,7 @@
               <tr>
                 <td>{{ item.orderNumber }}</td>
                 <td>{{ item.customerName }}</td>
-                <td>{{ item.status }}</td>
+                <td>{{ statusLabel(item.status) }}</td>
                 <td>{{ item.signedAt ? (item.signedAt | date: 'short') : '-' }}</td>
                 <td>{{ item.updatedAt | date: 'short' }}</td>
                 <td>
@@ -556,7 +557,7 @@
 
         <section class="decision-pane">
           <div class="status-block">
-            <p><strong>Status:</strong> {{ order.status }}</p>
+            <p><strong>Status:</strong> {{ statusLabel(order.status) }}</p>
             <p><strong>Valor:</strong> {{ order.orderValue | currency: 'BRL' }}</p>
             <p><strong>Saldo aberto:</strong> {{ order.openBalance | currency: 'BRL' }}</p>
             <p><strong>Limite:</strong> {{ order.creditLimit | currency: 'BRL' }}</p>
@@ -596,9 +597,10 @@
             }
           </section>
 
-          @if (isStatusOperator() && order.status === 'AGUARDANDO_ASSINATURA_ISABEL') {
+          @if (canSignOrder(order)) {
             <section class="signature-block">
               <h4>Assinatura digital</h4>
+              <p><strong>Responsável da etapa:</strong> {{ statusOwnerLabel(order.status) }}</p>
               <p>Modo ativo: <strong>{{ signatureMode().toUpperCase() }}</strong></p>
 
               @if (signatureMode() === 'canvas') {
@@ -637,29 +639,25 @@
               }
             </section>
 
-            <section class="return-block" [formGroup]="returnForm">
-              <label>
-                Justificativa de devolução
-                <textarea formControlName="reason" rows="4"></textarea>
-              </label>
-            </section>
-
             <div class="actions">
-              @if (isIsabel()) {
-                <button type="button" class="warn" (click)="returnSelectedOrder()" [disabled]="actionLoading()">
-                  Devolver para revisão
-                </button>
-              }
               <button type="button" (click)="signSelectedOrder()" [disabled]="actionLoading()">
                 @if (actionLoading()) {
                   Processando...
                 } @else {
-                  Baixar PDF assinado e concluir pedido
+                  {{ signatureActionLabel(order) }}
                 }
               </button>
             </div>
           } @else {
-            @if (isSignatureFrozen(order)) {
+            @if (order.status === 'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL') {
+              <section class="signature-block signature-readonly">
+                <h4>Esteira de assinatura</h4>
+                <p>
+                  Esta etapa está aguardando assinatura de
+                  <strong>{{ statusOwnerLabel(order.status) }}</strong>.
+                </p>
+              </section>
+            } @else if (isSignatureFrozen(order)) {
               <section class="signature-block signature-readonly">
                 <h4>Assinatura registrada (somente leitura)</h4>
                 <p>
@@ -683,11 +681,6 @@
               <section class="signature-block">
                 <h4>Assinatura manual (caneta virtual)</h4>
                 <p>Desenhe a assinatura com o mouse para gerar um PDF assinado pela pessoa logada.</p>
-                @if (order.status === 'AGUARDANDO_ASSINATURA_ISABEL' && !isIsabel()) {
-                  <p class="inline-warning">
-                    Conclusão final do pedido é feita com o login da Isabel para manter a governança da aprovação.
-                  </p>
-                }
                 <div class="signature-box">
                   <canvas
                     #signaturePad
