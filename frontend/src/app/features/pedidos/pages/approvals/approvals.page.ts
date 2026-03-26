@@ -30,6 +30,21 @@ export class ApprovalsPage implements OnDestroy {
   private readonly auth = inject(AuthService);
 
   @ViewChild('signaturePad') signaturePad?: ElementRef<HTMLCanvasElement>;
+  readonly user = this.auth.currentUser;
+  readonly isOperationalUser = computed(() => {
+    const usernames = (
+      (environment as { operationalUsernames?: string[] }).operationalUsernames ?? [
+        'isabel',
+        'isabel_dronepro',
+        'marcos',
+        'marcos_dronepro'
+      ]
+    )
+      .map((item) => String(item || '').trim().toLowerCase())
+      .filter(Boolean);
+    const username = String(this.user()?.username || '').trim().toLowerCase();
+    return usernames.includes(username);
+  });
 
   readonly loading = signal(true);
   readonly actionLoading = signal(false);
@@ -203,6 +218,47 @@ export class ApprovalsPage implements OnDestroy {
         },
         error: (error: { error?: { detail?: string }; message?: string }) => {
           const detail = error.error?.detail ?? error.message ?? 'Falha ao devolver pedido.';
+          this.errorMessage.set(String(detail));
+        }
+      });
+  }
+
+  canDelete(order: ApprovalOrderItem): boolean {
+    return this.isOperationalUser() && order.status !== 'EXCLUIDO';
+  }
+
+  deleteOrder(order: ApprovalOrderItem): void {
+    if (!this.canDelete(order)) {
+      this.errorMessage.set('Somente Marcos e Isabel podem excluir solicitações.');
+      return;
+    }
+    if (this.actionLoading()) {
+      return;
+    }
+
+    const accepted = window.confirm(
+      `Excluir a solicitação ${order.orderNumber} de ${order.customerName}? Esta ação remove o item da fila de Aprovações.`
+    );
+    if (!accepted) {
+      return;
+    }
+
+    this.actionLoading.set(true);
+    this.errorMessage.set(null);
+    this.toastMessage.set(null);
+    this.pedidoService
+      .deleteOrder(order.id)
+      .pipe(finalize(() => this.actionLoading.set(false)))
+      .subscribe({
+        next: () => {
+          if (this.selectedOrder()?.id === order.id) {
+            this.closeDecisionModal();
+          }
+          this.toastMessage.set(`Solicitação ${order.orderNumber} excluída com sucesso.`);
+          this.loadData();
+        },
+        error: (error: { error?: { detail?: string }; message?: string }) => {
+          const detail = error.error?.detail ?? error.message ?? 'Falha ao excluir solicitação.';
           this.errorMessage.set(String(detail));
         }
       });

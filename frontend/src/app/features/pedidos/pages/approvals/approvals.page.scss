@@ -98,6 +98,26 @@ button.warn {
   background: #c5412b;
 }
 
+button.icon-button {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+button.icon-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+button.icon-button.trash {
+  background: #fde9e9;
+  color: #962a2a;
+  border: 1px solid #efcccc;
+}
+
 button:disabled {
   opacity: 0.65;
   cursor: default;
