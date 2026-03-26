@@ -224,7 +224,19 @@ export class ApprovalsPage implements OnDestroy {
   }
 
   canDelete(order: ApprovalOrderItem): boolean {
-    return this.isOperationalUser() && order.status !== 'EXCLUIDO';
+    if (!this.isOperationalUser() || order.status === 'EXCLUIDO') {
+      return false;
+    }
+    if (
+      order.status === 'AGUARDANDO_ASSINATURA_ISABEL' ||
+      order.status === 'ASSINADO_AGUARDANDO_DISTRIBUICAO' ||
+      order.status === 'CONCLUIDO' ||
+      order.status === 'FATURADO' ||
+      !!order.signedAt
+    ) {
+      return false;
+    }
+    return true;
   }
 
   deleteOrder(order: ApprovalOrderItem): void {

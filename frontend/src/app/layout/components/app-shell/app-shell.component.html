@@ -66,12 +66,12 @@
       }
       @if (canAccessFinancialReceipts()) {
         <a
-          routerLink="/app/comprovantes-financeiros"
+          routerLink="/app/concluidos"
           [queryParams]="navQueryParams()"
           routerLinkActive="active"
           (click)="closeMobileNav()"
         >
-          Comprovantes Financeiros
+          Concluídos
         </a>
       }
     </nav>

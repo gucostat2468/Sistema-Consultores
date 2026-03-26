@@ -520,9 +520,9 @@ def ensure_commercial_signature_user(user: AuthenticatedUser) -> None:
 
 
 def ensure_financial_receipts_access(user: AuthenticatedUser) -> None:
-    if is_financial_username(user.username):
+    if is_financial_username(user.username) or is_operational_username(user.username):
         return
-    raise HTTPException(status_code=403, detail="Acesso exclusivo do perfil Vitor Financeiro.")
+    raise HTTPException(status_code=403, detail="Acesso restrito ao time operacional autorizado.")
 
 
 def rows_to_dataframe(rows: list[dict]) -> pd.DataFrame:
@@ -4281,6 +4281,16 @@ def pedidos_excluir(
         order_row = fetch_order_row_or_404(conn, order_id)
         if order_row["status"] == ORDER_STATUS_DELETED:
             raise HTTPException(status_code=409, detail="Solicitacao ja foi excluida.")
+        if order_row["status"] in {
+            ORDER_STATUS_AWAITING_SIGNATURE,
+            ORDER_STATUS_SIGNED_DISTRIBUTING,
+            ORDER_STATUS_DONE,
+            ORDER_STATUS_BILLED,
+        } or order_row.get("signed_at"):
+            raise HTTPException(
+                status_code=409,
+                detail="Pedidos com assinatura registrada nao podem ser excluidos para preservar historico e auditoria.",
+            )
 
         now_iso = utc_now_iso()
         conn.execute(

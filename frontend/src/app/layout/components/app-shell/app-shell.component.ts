@@ -74,7 +74,7 @@ export class AppShellComponent {
   readonly canAccessStatus = computed(() => this.isCommercialDirector());
   readonly canAccessApprovals = computed(() => this.isIsabel());
   readonly canAccessReportUpdate = computed(() => this.isOperationalUser());
-  readonly canAccessFinancialReceipts = computed(() => this.isFinancialUser());
+  readonly canAccessFinancialReceipts = computed(() => this.isFinancialUser() || this.isOperationalUser());
   readonly navQueryParams = computed(() => {
     const consultantId = this.selectedConsultantId();
     return consultantId ? { consultantId } : {};
@@ -157,8 +157,8 @@ export class AppShellComponent {
       this.routeTitle.set('Aprovacoes');
       return;
     }
-    if (url.includes('/comprovantes-financeiros')) {
-      this.routeTitle.set('Comprovantes Financeiros');
+    if (url.includes('/concluidos') || url.includes('/comprovantes-financeiros')) {
+      this.routeTitle.set('Concluídos');
       return;
     }
     if (url.includes('/atualizacao-report')) {

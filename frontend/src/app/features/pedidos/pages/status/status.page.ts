@@ -18,7 +18,7 @@ import {
   PedidoService
 } from '../../services/pedido.service';
 
-type StatusTab = 'pendentes' | 'historico' | 'negados' | 'importacoes' | 'config';
+type StatusTab = 'pendentes' | 'negados' | 'importacoes' | 'config';
 
 const DEFAULT_SUMMARY: ApprovalSummary = {
   total: 0,
@@ -140,10 +140,6 @@ export class StatusPage implements OnDestroy {
 
   readonly pendingItems = computed(() =>
     this.items().filter((item) => PENDING_SIGNATURE_STATUSES.includes(item.status))
-  );
-
-  readonly historyItems = computed(() =>
-    this.items().filter((item) => item.status === 'CONCLUIDO' || item.status === 'FATURADO')
   );
 
   readonly negativeItems = computed(() =>
@@ -295,7 +291,19 @@ export class StatusPage implements OnDestroy {
     if (!this.isAdmin()) {
       return false;
     }
-    return order.status !== 'EXCLUIDO';
+    if (order.status === 'EXCLUIDO') {
+      return false;
+    }
+    if (
+      order.status === 'AGUARDANDO_ASSINATURA_ISABEL' ||
+      order.status === 'ASSINADO_AGUARDANDO_DISTRIBUICAO' ||
+      order.status === 'CONCLUIDO' ||
+      order.status === 'FATURADO' ||
+      !!order.signedAt
+    ) {
+      return false;
+    }
+    return true;
   }
 
   deleteOrder(order: ApprovalOrderItem): void {

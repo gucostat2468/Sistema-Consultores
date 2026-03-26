@@ -6,6 +6,7 @@
   <section class="card intro">
     <h2>Status de Aprovação Digital</h2>
     <p>Fila da assinatura do Diretor Comercial antes de seguir para a sessão Aprovações da Isabel.</p>
+    <p>Pedidos finalizados ficam disponíveis na sessão separada Concluídos.</p>
     <p>Atualização automática em tempo real para manter o fluxo em esteira sem bloqueios.</p>
   </section>
 
@@ -30,10 +31,6 @@
       <p>Assinados hoje</p>
       <strong>{{ summary().signedToday }}</strong>
     </article>
-    <article class="card summary-card">
-      <p>Concluídos</p>
-      <strong>{{ summary().done + summary().billed }}</strong>
-    </article>
   </section>
 
   <section class="card filters">
@@ -47,7 +44,6 @@
             <option value="NEGADO_SEM_LIMITE">Negado sem limite</option>
             <option value="DEVOLVIDO_REVISAO">Devolvido revisão</option>
             <option value="ASSINADO_AGUARDANDO_DISTRIBUICAO">Assinado distribuindo</option>
-            <option value="CONCLUIDO">Concluído</option>
           </select>
         </label>
         <label>
@@ -84,9 +80,6 @@
   <section class="tabs">
     <button type="button" [class.active]="tab() === 'pendentes'" (click)="changeTab('pendentes')">
       Pendentes ({{ pendingItems().length }})
-    </button>
-    <button type="button" [class.active]="tab() === 'historico'" (click)="changeTab('historico')">
-      Concluídos ({{ historyItems().length }})
     </button>
     <button type="button" [class.active]="tab() === 'negados'" (click)="changeTab('negados')">
       Negados ({{ negativeItems().length }})
@@ -130,63 +123,6 @@
                     <button type="button" (click)="openDecisionModal(item)">
                       {{ canSignOrder(item) ? 'Assinar e encaminhar para Isabel' : 'Visualizar' }}
                     </button>
-                    @if (canDelete(item)) {
-                      <button
-                        type="button"
-                        class="icon-button trash"
-                        [disabled]="actionLoading()"
-                        title="Excluir solicitação"
-                        aria-label="Excluir solicitação"
-                        (click)="deleteOrder(item)"
-                      >
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                          <path
-                            d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"
-                            fill="currentColor"
-                          />
-                        </svg>
-                      </button>
-                    }
-                  </div>
-                </td>
-              </tr>
-            }
-          }
-        </tbody>
-      </table>
-    </section>
-  }
-
-  @if (tab() === 'historico') {
-    <section class="card table-card">
-      <table class="mobile-stack">
-        <thead>
-          <tr>
-            <th>Pedido</th>
-            <th>Cliente</th>
-            <th>Status</th>
-            <th>Responsável pela assinatura</th>
-            <th>Assinado em</th>
-            <th>Atualizado</th>
-            <th>Ações</th>
-          </tr>
-        </thead>
-        <tbody>
-          @if (historyItems().length === 0) {
-            <tr><td colspan="7">Sem pedidos concluídos para os filtros atuais.</td></tr>
-          } @else {
-            @for (item of historyItems(); track item.id) {
-              <tr>
-                <td data-label="Pedido">{{ item.orderNumber }}</td>
-                <td data-label="Cliente">{{ item.customerName }}</td>
-                <td data-label="Status">{{ statusLabel(item.status) }}</td>
-                <td data-label="Responsável pela assinatura">{{ signatureResponsibleLabel(item) }}</td>
-                <td data-label="Assinado em">{{ item.signedAt ? (item.signedAt | date: 'short') : '-' }}</td>
-                <td data-label="Atualizado">{{ item.updatedAt | date: 'short' }}</td>
-                <td data-label="Ações">
-                  <div class="row-actions">
-                    <button type="button" class="ghost" (click)="openDecisionModal(item)">Detalhes</button>
-                    <button type="button" (click)="downloadOrder(item)">Download</button>
                     @if (canDelete(item)) {
                       <button
                         type="button"

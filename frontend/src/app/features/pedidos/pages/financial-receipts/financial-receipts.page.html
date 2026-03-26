@@ -1,11 +1,23 @@
 @if (loading()) {
   <section class="card state">
-    <p>Carregando comprovantes financeiros...</p>
+    <p>Carregando histórico de pedidos concluídos...</p>
   </section>
 } @else {
   <section class="card intro">
-    <h2>Comprovantes Financeiros</h2>
-    <p>Pedidos aprovados com assinatura digital e comprovante pronto para auditoria e download.</p>
+    <h2>Concluídos</h2>
+    <p>Histórico oficial de pedidos assinados, com rastreabilidade completa de data e horário.</p>
+    <p>Use Detalhes para conferir documentos, trilha de aprovação, registros e auditoria.</p>
+  </section>
+
+  <section class="summary-grid">
+    <article class="card summary-card">
+      <p>Total concluídos</p>
+      <strong>{{ items().length }}</strong>
+    </article>
+    <article class="card summary-card">
+      <p>Assinados hoje</p>
+      <strong>{{ signedToday() }}</strong>
+    </article>
   </section>
 
   <section class="card filters">
@@ -39,6 +51,11 @@
       <p>{{ errorMessage() }}</p>
     </section>
   }
+  @if (toastMessage()) {
+    <section class="card state state-success">
+      <p>{{ toastMessage() }}</p>
+    </section>
+  }
 
   <section class="card table-card">
     <table class="mobile-stack">
@@ -46,27 +63,39 @@
         <tr>
           <th>Pedido</th>
           <th>Cliente</th>
+          <th>Valor</th>
+          <th>Consultor</th>
           <th>Status</th>
           <th>Responsável pela assinatura</th>
           <th>Assinado em</th>
-          <th>Atualizado</th>
+          <th>Criado em</th>
+          <th>Atualizado em</th>
           <th>Ações</th>
         </tr>
       </thead>
       <tbody>
         @if (items().length === 0) {
-          <tr><td colspan="7">Nenhum comprovante encontrado para os filtros atuais.</td></tr>
+          <tr><td colspan="10">Nenhum pedido concluído encontrado para os filtros atuais.</td></tr>
         } @else {
           @for (item of items(); track item.id) {
             <tr>
               <td data-label="Pedido">{{ item.orderNumber }}</td>
               <td data-label="Cliente">{{ item.customerName }}</td>
+              <td data-label="Valor">{{ item.orderValue | currency: 'BRL' }}</td>
+              <td data-label="Consultor">{{ item.consultantName || '-' }}</td>
               <td data-label="Status">{{ statusLabel(item.status) }}</td>
-              <td data-label="Responsável pela assinatura">{{ signatureResponsibleLabel(item) }}</td>
+              <td data-label="Responsável">{{ signatureResponsibleLabel(item) }}</td>
               <td data-label="Assinado em">{{ item.signedAt ? (item.signedAt | date: 'short') : '-' }}</td>
-              <td data-label="Atualizado">{{ item.updatedAt | date: 'short' }}</td>
+              <td data-label="Criado em">{{ item.createdAt | date: 'short' }}</td>
+              <td data-label="Atualizado em">{{ item.updatedAt | date: 'short' }}</td>
               <td data-label="Ações">
-                <button type="button" (click)="download(item)">Download</button>
+                <div class="row-actions">
+                  <button type="button" class="ghost" (click)="openDetails(item)">Detalhes</button>
+                  <button type="button" [disabled]="actionLoading()" (click)="download(item)">Salvar PDF</button>
+                  <button type="button" class="ghost" [disabled]="actionLoading()" (click)="print(item)">
+                    Imprimir
+                  </button>
+                </div>
               </td>
             </tr>
           }
@@ -75,3 +104,123 @@
     </table>
   </section>
 }
+
+@if (decisionModalOpen() && selectedOrder(); as order) {
+  <section class="modal-backdrop">
+    <article class="modal card">
+      <header>
+        <h3>{{ order.orderNumber }} - {{ order.customerName }}</h3>
+        <button type="button" class="ghost" (click)="closeDetails()">Fechar</button>
+      </header>
+
+      <div class="modal-grid">
+        <section class="pdf-pane">
+          <div class="pdf-pane-header">
+            <p class="label">Documentos oficiais</p>
+            <div class="preview-tabs">
+              <button
+                type="button"
+                class="ghost"
+                [class.active]="previewTab() === 'pedido'"
+                (click)="setPreviewTab('pedido')"
+              >
+                Pedido assinado
+              </button>
+              <button
+                type="button"
+                class="ghost"
+                [class.active]="previewTab() === 'analise'"
+                (click)="setPreviewTab('analise')"
+              >
+                Saúde financeira
+              </button>
+            </div>
+          </div>
+
+          @if (previewTab() === 'pedido') {
+            @if (previewLoading()) {
+              <p>Carregando PDF do pedido...</p>
+            } @else if (!previewUrl()) {
+              <p>Pré-visualização do pedido indisponível.</p>
+            } @else {
+              <iframe [src]="previewUrl()" title="PDF do pedido assinado"></iframe>
+            }
+          } @else {
+            @if (analysisPreviewLoading()) {
+              <p>Carregando PDF de saúde financeira...</p>
+            } @else if (!analysisPreviewUrl()) {
+              <p>PDF de saúde financeira indisponível para este pedido.</p>
+            } @else {
+              <iframe [src]="analysisPreviewUrl()" title="PDF de saúde financeira"></iframe>
+            }
+          }
+
+          <div class="actions preview-actions">
+            <button type="button" class="ghost" (click)="download(order)">Salvar PDF do pedido</button>
+            <button type="button" (click)="print(order)">Imprimir pedido</button>
+            <button type="button" class="ghost" (click)="downloadAnalysis(order)">Salvar PDF de saúde financeira</button>
+          </div>
+        </section>
+
+        <section class="details-pane">
+          <div class="status-block">
+            <p><strong>Status:</strong> {{ statusLabel(order.status) }}</p>
+            <p><strong>Valor:</strong> {{ order.orderValue | currency: 'BRL' }}</p>
+            <p><strong>Consultor:</strong> {{ order.consultantName || '-' }}</p>
+            <p><strong>Solicitante:</strong> {{ order.requestedByName || '-' }}</p>
+            <p><strong>Responsável pela assinatura:</strong> {{ signatureResponsibleLabel(order) }}</p>
+            <p><strong>Assinado em:</strong> {{ order.signedAt ? (order.signedAt | date: 'short') : '-' }}</p>
+            <p><strong>Criado em:</strong> {{ order.createdAt | date: 'short' }}</p>
+            <p><strong>Atualizado em:</strong> {{ order.updatedAt | date: 'short' }}</p>
+            @if (order.statusReason) {
+              <p><strong>Motivo:</strong> {{ order.statusReason }}</p>
+            }
+          </div>
+
+          @if (order.distribution.approvals?.length) {
+            <section class="signature-log">
+              <h4>Registro de assinaturas</h4>
+              <ul>
+                @for (approval of order.distribution.approvals; track $index) {
+                  <li>
+                    <p>
+                      <strong>{{ approval.roleLabel || approval.stageLabel || 'Etapa' }}</strong>
+                    </p>
+                    <p>{{ approval.signedByName || '-' }} em {{ approval.signedAt ? (approval.signedAt | date: 'short') : '-' }}</p>
+                  </li>
+                }
+              </ul>
+            </section>
+          }
+
+          <section class="audit-block">
+            <h4>Histórico e auditoria</h4>
+            @if (auditLoading()) {
+              <p>Carregando trilha de auditoria...</p>
+            } @else if (decisionEvents().length === 0) {
+              <p>Sem eventos registrados para este pedido.</p>
+            } @else {
+              <ul class="event-list">
+                @for (event of decisionEvents(); track $index) {
+                  <li>
+                    <p>
+                      <strong>{{ event.eventType }}</strong>
+                      em {{ event.createdAt | date: 'short' }}
+                    </p>
+                    <p>
+                      por {{ event.actorName || 'Sistema' }}
+                      @if (event.message) {
+                        - {{ event.message }}
+                      }
+                    </p>
+                  </li>
+                }
+              </ul>
+            }
+          </section>
+        </section>
+      </div>
+    </article>
+  </section>
+}
+

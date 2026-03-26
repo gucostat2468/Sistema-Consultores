@@ -104,8 +104,9 @@ export const financialReceiptsAccessGuard: CanActivateFn = () => {
   }
 
   const username = String(user.username || '').trim().toLowerCase();
-  const isFinancialUser = getFinancialUsernames().includes(username);
-  if (isFinancialUser) {
+  const isAllowedUser =
+    getFinancialUsernames().includes(username) || getOperationalUsernames().includes(username);
+  if (isAllowedUser) {
     return true;
   }
   return router.createUrlTree(['/app/dashboard']);
@@ -126,8 +127,8 @@ export const financialIsolationGuard: CanActivateChildFn = (_route, state) => {
     return true;
   }
 
-  if (state.url.includes('/app/comprovantes-financeiros')) {
+  if (state.url.includes('/app/concluidos') || state.url.includes('/app/comprovantes-financeiros')) {
     return true;
   }
-  return router.createUrlTree(['/app/comprovantes-financeiros']);
+  return router.createUrlTree(['/app/concluidos']);
 };

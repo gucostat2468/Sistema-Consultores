@@ -78,6 +78,14 @@ export const routes: Routes = [
           )
       },
       {
+        path: 'concluidos',
+        canActivate: [financialReceiptsAccessGuard],
+        loadComponent: () =>
+          import('./features/pedidos/pages/financial-receipts/financial-receipts.page').then(
+            (m) => m.FinancialReceiptsPage
+          )
+      },
+      {
         path: 'comprovantes-financeiros',
         canActivate: [financialReceiptsAccessGuard],
         loadComponent: () =>
