@@ -3620,7 +3620,7 @@ def pedidos_status(
         params.append(str(dateTo))
 
     where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
-    capped_limit = max(1, min(int(limit), 1000))
+    capped_limit = max(1, min(int(limit), 20000))
     params.append(capped_limit)
 
     with get_connection() as conn:
@@ -3755,7 +3755,7 @@ def pedidos_comprovantes_financeiros(
         params.append(str(dateTo))
 
     where_sql = f"WHERE {' AND '.join(filters)}"
-    capped_limit = max(1, min(int(limit), 1000))
+    capped_limit = max(1, min(int(limit), 20000))
     params.append(capped_limit)
 
     with get_connection() as conn:

@@ -85,9 +85,9 @@
               <td data-label="Consultor">{{ item.consultantName || '-' }}</td>
               <td data-label="Status">{{ statusLabel(item.status) }}</td>
               <td data-label="Responsável">{{ signatureResponsibleLabel(item) }}</td>
-              <td data-label="Assinado em">{{ item.signedAt ? (item.signedAt | date: 'short') : '-' }}</td>
-              <td data-label="Criado em">{{ item.createdAt | date: 'short' }}</td>
-              <td data-label="Atualizado em">{{ item.updatedAt | date: 'short' }}</td>
+              <td data-label="Assinado em">{{ formatDateTime(item.signedAt) }}</td>
+              <td data-label="Criado em">{{ formatDateTime(item.createdAt) }}</td>
+              <td data-label="Atualizado em">{{ formatDateTime(item.updatedAt) }}</td>
               <td data-label="Ações">
                 <div class="row-actions">
                   <button type="button" class="ghost" (click)="openDetails(item)">Detalhes</button>
@@ -169,9 +169,9 @@
             <p><strong>Consultor:</strong> {{ order.consultantName || '-' }}</p>
             <p><strong>Solicitante:</strong> {{ order.requestedByName || '-' }}</p>
             <p><strong>Responsável pela assinatura:</strong> {{ signatureResponsibleLabel(order) }}</p>
-            <p><strong>Assinado em:</strong> {{ order.signedAt ? (order.signedAt | date: 'short') : '-' }}</p>
-            <p><strong>Criado em:</strong> {{ order.createdAt | date: 'short' }}</p>
-            <p><strong>Atualizado em:</strong> {{ order.updatedAt | date: 'short' }}</p>
+            <p><strong>Assinado em:</strong> {{ formatDateTime(order.signedAt) }}</p>
+            <p><strong>Criado em:</strong> {{ formatDateTime(order.createdAt) }}</p>
+            <p><strong>Atualizado em:</strong> {{ formatDateTime(order.updatedAt) }}</p>
             @if (order.statusReason) {
               <p><strong>Motivo:</strong> {{ order.statusReason }}</p>
             }
@@ -186,7 +186,7 @@
                     <p>
                       <strong>{{ approval.roleLabel || approval.stageLabel || 'Etapa' }}</strong>
                     </p>
-                    <p>{{ approval.signedByName || '-' }} em {{ approval.signedAt ? (approval.signedAt | date: 'short') : '-' }}</p>
+                    <p>{{ approval.signedByName || '-' }} em {{ formatDateTime(approval.signedAt) }}</p>
                   </li>
                 }
               </ul>
@@ -205,7 +205,7 @@
                   <li>
                     <p>
                       <strong>{{ event.eventType }}</strong>
-                      em {{ event.createdAt | date: 'short' }}
+                      em {{ formatDateTime(event.createdAt) }}
                     </p>
                     <p>
                       por {{ event.actorName || 'Sistema' }}
@@ -223,4 +223,3 @@
     </article>
   </section>
 }
-

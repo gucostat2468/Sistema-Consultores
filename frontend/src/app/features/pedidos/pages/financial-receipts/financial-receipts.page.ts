@@ -7,6 +7,8 @@ import { finalize } from 'rxjs/operators';
 import { ApprovalOrderItem, OrderStatusDetail, PedidoService } from '../../services/pedido.service';
 
 const LIVE_REFRESH_INTERVAL_MS = 2500;
+const HISTORY_QUERY_LIMIT = 20000;
+const HISTORY_TIME_ZONE = 'America/Sao_Paulo';
 
 @Component({
   selector: 'app-financial-receipts-page',
@@ -40,21 +42,17 @@ export class FinancialReceiptsPage implements OnDestroy {
   readonly dateTo = signal('');
 
   readonly signedToday = computed(() => {
-    const today = new Date();
-    const yyyy = today.getFullYear();
-    const mm = today.getMonth();
-    const dd = today.getDate();
+    const todayKey = this.dateKeyFromDate(new Date());
     return this.items().filter((item) => {
       const raw = String(item.signedAt || '').trim();
       if (!raw) {
         return false;
       }
       const stamp = new Date(raw);
-      return (
-        stamp.getFullYear() === yyyy &&
-        stamp.getMonth() === mm &&
-        stamp.getDate() === dd
-      );
+      if (Number.isNaN(stamp.getTime())) {
+        return false;
+      }
+      return this.dateKeyFromDate(stamp) === todayKey;
     }).length;
   });
 
@@ -62,6 +60,22 @@ export class FinancialReceiptsPage implements OnDestroy {
   private analysisPreviewObjectUrl: string | null = null;
   private liveRefreshHandle: ReturnType<typeof setInterval> | null = null;
   private liveRefreshBusy = false;
+  private readonly dateFormatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: HISTORY_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  private readonly dateTimeFormatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: HISTORY_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
 
   constructor() {
     this.load();
@@ -195,6 +209,25 @@ export class FinancialReceiptsPage implements OnDestroy {
     return String(status);
   }
 
+  formatDateTime(value: string | null | undefined): string {
+    const raw = String(value || '').trim();
+    if (!raw) {
+      return '-';
+    }
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) {
+      return raw;
+    }
+    const parts = this.extractFormatterParts(this.dateTimeFormatter, parsed);
+    const year = parts['year'] || '0000';
+    const month = parts['month'] || '00';
+    const day = parts['day'] || '00';
+    const hour = parts['hour'] || '00';
+    const minute = parts['minute'] || '00';
+    const second = parts['second'] || '00';
+    return `${year}-${month}-${day} ${hour}:${minute}:${second} ${HISTORY_TIME_ZONE}`;
+  }
+
   private load(): void {
     this.loading.set(true);
     this.errorMessage.set(null);
@@ -203,7 +236,7 @@ export class FinancialReceiptsPage implements OnDestroy {
         customer: this.customerFilter().trim(),
         dateFrom: this.dateFrom(),
         dateTo: this.dateTo(),
-        limit: 1000
+        limit: HISTORY_QUERY_LIMIT
       })
       .pipe(takeUntilDestroyed(this.destroyRef), finalize(() => this.loading.set(false)))
       .subscribe({
@@ -244,7 +277,7 @@ export class FinancialReceiptsPage implements OnDestroy {
         customer: this.customerFilter().trim(),
         dateFrom: this.dateFrom(),
         dateTo: this.dateTo(),
-        limit: 1000
+        limit: HISTORY_QUERY_LIMIT
       })
       .pipe(takeUntilDestroyed(this.destroyRef), finalize(() => (this.liveRefreshBusy = false)))
       .subscribe({
@@ -388,5 +421,24 @@ export class FinancialReceiptsPage implements OnDestroy {
     );
     setTimeout(() => URL.revokeObjectURL(url), 60000);
   }
-}
 
+  private dateKeyFromDate(dateValue: Date): string {
+    const parts = this.extractFormatterParts(this.dateFormatter, dateValue);
+    const year = parts['year'] || '0000';
+    const month = parts['month'] || '00';
+    const day = parts['day'] || '00';
+    return `${year}-${month}-${day}`;
+  }
+
+  private extractFormatterParts(
+    formatter: Intl.DateTimeFormat,
+    dateValue: Date
+  ): Record<string, string> {
+    return formatter.formatToParts(dateValue).reduce<Record<string, string>>((acc, part) => {
+      if (part.type !== 'literal') {
+        acc[part.type] = part.value;
+      }
+      return acc;
+    }, {});
+  }
+}
