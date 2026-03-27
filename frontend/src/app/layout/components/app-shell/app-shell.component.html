@@ -117,6 +117,25 @@
       </div>
     </header>
 
+    <nav class="mobile-sections" aria-label="Sessões do sistema">
+      <a routerLink="/app/dashboard" [queryParams]="navQueryParams()" routerLinkActive="active">Dashboard</a>
+      <a routerLink="/app/clientes" [queryParams]="navQueryParams()" routerLinkActive="active">Clientes</a>
+      <a routerLink="/app/titulos" [queryParams]="navQueryParams()" routerLinkActive="active">Titulos</a>
+      <a routerLink="/app/analise-cliente" [queryParams]="navQueryParams()" routerLinkActive="active">Analise</a>
+      @if (canAccessStatus()) {
+        <a routerLink="/app/status" [queryParams]="navQueryParams()" routerLinkActive="active">Status</a>
+      }
+      @if (canAccessApprovals()) {
+        <a routerLink="/app/aprovacoes" [queryParams]="navQueryParams()" routerLinkActive="active">Aprovações</a>
+      }
+      @if (canAccessReportUpdate()) {
+        <a routerLink="/app/atualizacao-report" [queryParams]="navQueryParams()" routerLinkActive="active">Atualização</a>
+      }
+      @if (canAccessFinancialReceipts()) {
+        <a routerLink="/app/concluidos" [queryParams]="navQueryParams()" routerLinkActive="active">Concluídos</a>
+      }
+    </nav>
+
     <section class="page">
       <router-outlet />
     </section>
