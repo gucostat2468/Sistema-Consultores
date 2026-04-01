@@ -102,6 +102,13 @@ export class ClientsPage {
         this.creditItems.set(creditLimits.items);
         this.loading.set(false);
         this.restoreScrollPosition();
+      }, (error: { status?: number }) => {
+        this.loading.set(false);
+        if (Number(error?.status) === 401) {
+          this.newCustomerError.set('Sessao expirada. Faca login novamente.');
+          return;
+        }
+        this.newCustomerError.set('Nao foi possivel carregar os clientes deste escopo.');
       });
   }
 

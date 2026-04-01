@@ -4887,7 +4887,13 @@ def pedidos_admin_email_update(
 @app.get("/", include_in_schema=False, response_model=None)
 def frontend_root():
     if FRONTEND_INDEX_FILE.is_file():
-        return FileResponse(FRONTEND_INDEX_FILE)
+        return FileResponse(
+            FRONTEND_INDEX_FILE,
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+            },
+        )
     return JSONResponse({"ok": True, "service": "dronepro-api", "frontend": "not-built"})
 
 
@@ -4901,7 +4907,13 @@ def frontend_spa_or_asset(full_path: str):
         return FileResponse(static_file)
 
     if FRONTEND_INDEX_FILE.is_file():
-        return FileResponse(FRONTEND_INDEX_FILE)
+        return FileResponse(
+            FRONTEND_INDEX_FILE,
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+            },
+        )
 
     raise HTTPException(status_code=404, detail="Rota nao encontrada.")
 
