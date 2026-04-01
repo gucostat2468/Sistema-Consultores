@@ -21,61 +21,64 @@
   </section>
 }
 
+<section class="card add-customer-card">
+  <section class="add-customer-block">
+    <h4>Cadastrar cliente manualmente</h4>
+    <p>Use este cadastro para manter o cliente visível na lista, mesmo sem títulos importados.</p>
+    <div class="add-customer-grid">
+      <label>
+        Nome do cliente
+        <input
+          [ngModel]="newCustomerName()"
+          (ngModelChange)="setNewCustomerName($event)"
+          placeholder="Digite o nome do cliente"
+          maxlength="220"
+        />
+      </label>
+      <label>
+        Codigo do cliente (opcional)
+        <input
+          [ngModel]="newCustomerCode()"
+          (ngModelChange)="setNewCustomerCode($event)"
+          placeholder="Ex.: 12345"
+          maxlength="80"
+        />
+      </label>
+    </div>
+    <div class="add-customer-actions">
+      <button
+        type="button"
+        class="approval-btn"
+        [disabled]="addingCustomer() || !canAddCustomer()"
+        (click)="addCustomer()"
+      >
+        @if (addingCustomer()) {
+          Cadastrando...
+        } @else {
+          Cadastrar cliente
+        }
+      </button>
+    </div>
+    @if (!canAddCustomer()) {
+      <p class="add-customer-hint">
+        Selecione um consultor no Dashboard para cadastrar cliente neste escopo.
+      </p>
+    }
+    @if (newCustomerFeedback()) {
+      <p class="add-customer-feedback">{{ newCustomerFeedback() }}</p>
+    }
+    @if (newCustomerError()) {
+      <p class="add-customer-error">{{ newCustomerError() }}</p>
+    }
+  </section>
+</section>
+
 <section class="card table-card">
   @if (loading()) {
     <p class="state">Carregando clientes...</p>
   } @else if (filtered.length === 0) {
     @if (items().length === 0) {
       <p class="state">Nenhum cliente cadastrado neste escopo.</p>
-      <section class="add-customer-block">
-        <h4>Cadastrar cliente manualmente</h4>
-        <p>Use este cadastro para manter o cliente visível na lista, mesmo sem títulos importados.</p>
-        <div class="add-customer-grid">
-          <label>
-            Nome do cliente
-            <input
-              [ngModel]="newCustomerName()"
-              (ngModelChange)="setNewCustomerName($event)"
-              placeholder="Digite o nome do cliente"
-              maxlength="220"
-            />
-          </label>
-          <label>
-            Codigo do cliente (opcional)
-            <input
-              [ngModel]="newCustomerCode()"
-              (ngModelChange)="setNewCustomerCode($event)"
-              placeholder="Ex.: 12345"
-              maxlength="80"
-            />
-          </label>
-        </div>
-        <div class="add-customer-actions">
-          <button
-            type="button"
-            class="approval-btn"
-            [disabled]="addingCustomer() || !canAddCustomer()"
-            (click)="addCustomer()"
-          >
-            @if (addingCustomer()) {
-              Cadastrando...
-            } @else {
-              Cadastrar cliente
-            }
-          </button>
-        </div>
-        @if (!canAddCustomer()) {
-          <p class="add-customer-hint">
-            Selecione um consultor no Dashboard para cadastrar cliente neste escopo.
-          </p>
-        }
-        @if (newCustomerFeedback()) {
-          <p class="add-customer-feedback">{{ newCustomerFeedback() }}</p>
-        }
-        @if (newCustomerError()) {
-          <p class="add-customer-error">{{ newCustomerError() }}</p>
-        }
-      </section>
     } @else {
       <p class="state">Nenhum cliente encontrado para os filtros atuais.</p>
     }
