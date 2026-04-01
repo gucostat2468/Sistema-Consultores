@@ -2529,6 +2529,9 @@ def dashboard_add_customer(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    if not bool(created.get("linkCreated")):
+        raise HTTPException(status_code=409, detail="Cliente ja existe na carteira deste consultor.")
+
     return {
         "item": {
             "consultantId": int(created["consultant_id"]),
@@ -2536,6 +2539,7 @@ def dashboard_add_customer(
             "customerName": str(created.get("customer_name") or ""),
             "customerCode": str(created.get("customer_code") or ""),
             "created": bool(created.get("created")),
+            "linkCreated": bool(created.get("linkCreated")),
         }
     }
 

@@ -78,7 +78,8 @@ export class DashboardService {
           consultantName: session?.name ?? 'Consultor',
           customerName: payload.customerName.trim(),
           customerCode: String(payload.customerCode ?? '').trim(),
-          created: true
+          created: true,
+          linkCreated: true
         }
       }).pipe(delay(160));
     }

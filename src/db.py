@@ -952,13 +952,24 @@ def upsert_consultant_customer(
             customer_name=cleaned_name,
             customer_code=cleaned_code,
         )
-        conn.execute(
+        link_exists = conn.execute(
             """
-            INSERT OR IGNORE INTO consultant_customers (consultant_id, customer_id)
-            VALUES (?, ?)
+            SELECT 1
+            FROM consultant_customers
+            WHERE consultant_id = ? AND customer_id = ?
+            LIMIT 1
             """,
             (int(consultant_id), int(customer_id)),
-        )
+        ).fetchone()
+        link_created = link_exists is None
+        if link_created:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO consultant_customers (consultant_id, customer_id)
+                VALUES (?, ?)
+                """,
+                (int(consultant_id), int(customer_id)),
+            )
 
         row = conn.execute(
             """
@@ -982,6 +993,7 @@ def upsert_consultant_customer(
 
     payload = dict(row)
     payload["created"] = bool(created)
+    payload["linkCreated"] = bool(link_created)
     return payload
 
 

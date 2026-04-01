@@ -158,11 +158,7 @@ export class ClientsPage {
           this.statusFilter.set('Todos');
           this.newCustomerName.set('');
           this.newCustomerCode.set('');
-          this.newCustomerFeedback.set(
-            response.item.created
-              ? `Cliente ${response.item.customerName} cadastrado com sucesso.`
-              : `Cliente ${response.item.customerName} já existia e foi mantido na lista.`
-          );
+          this.newCustomerFeedback.set(`Cliente ${response.item.customerName} cadastrado com sucesso.`);
           this.rememberContext();
           this.addingCustomer.set(false);
         },

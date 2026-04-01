@@ -40,6 +40,7 @@ export interface DashboardCustomerItem {
   customerName: string;
   customerCode: string;
   created: boolean;
+  linkCreated?: boolean;
 }
 
 export interface ReceivableItem {
