@@ -66,6 +66,10 @@ select {
   justify-content: flex-start;
 }
 
+.manual-consultant-field {
+  max-width: 420px;
+}
+
 .add-customer-feedback,
 .add-customer-error,
 .add-customer-hint {
@@ -236,6 +240,11 @@ select {
   background: #0f5b5a;
   color: #fff;
   cursor: pointer;
+}
+
+.approval-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 @media (max-width: 1160px) {

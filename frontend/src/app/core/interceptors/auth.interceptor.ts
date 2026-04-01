@@ -5,11 +5,30 @@ import { catchError, throwError } from 'rxjs';
 import { AuthService } from '../services/auth.service';
 import { environment } from '../../../environments/environment';
 
+function isApiRequestUrl(url: string): boolean {
+  const normalizedBase = String(environment.apiBaseUrl ?? '').trim().replace(/\/+$/, '');
+  if (normalizedBase && (url === normalizedBase || url.startsWith(`${normalizedBase}/`))) {
+    return true;
+  }
+  if (url === '/api' || url.startsWith('/api/')) {
+    return true;
+  }
+  if (typeof window !== 'undefined') {
+    try {
+      const parsed = new URL(url, window.location.origin);
+      return parsed.pathname === '/api' || parsed.pathname.startsWith('/api/');
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
   const auth = inject(AuthService);
   const router = inject(Router);
   const token = auth.token();
-  const isApiRequest = req.url.startsWith(environment.apiBaseUrl);
+  const isApiRequest = isApiRequestUrl(req.url);
 
   const request =
     token && isApiRequest

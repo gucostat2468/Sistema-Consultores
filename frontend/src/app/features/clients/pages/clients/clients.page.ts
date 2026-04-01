@@ -5,7 +5,7 @@ import { ActivatedRoute, RouterLink } from '@angular/router';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { distinctUntilChanged, forkJoin, map, switchMap } from 'rxjs';
 import { environment } from '../../../../../environments/environment';
-import { ClientHealth, CreditLimitItem } from '../../../../core/models/dashboard.models';
+import { ClientHealth, Consultant, CreditLimitItem } from '../../../../core/models/dashboard.models';
 import { AuthService } from '../../../../core/services/auth.service';
 import { DashboardService } from '../../../../core/services/dashboard.service';
 import { EncaminharModalComponent } from '../../../pedidos/components/encaminhar-modal/encaminhar-modal.component';
@@ -43,6 +43,8 @@ export class ClientsPage {
   readonly search = signal('');
   readonly statusFilter = signal<'Todos' | ClientHealth['status']>('Todos');
   readonly selectedConsultantId = signal<number | null>(null);
+  readonly manualConsultants = signal<Consultant[]>([]);
+  readonly manualConsultantId = signal<number | null>(null);
   readonly creditLookup = computed(() => buildCreditLookupMaps(this.creditItems()));
   readonly modalClient = signal<ClientHealth | null>(null);
   readonly orderFeedback = signal<string | null>(null);
@@ -51,7 +53,12 @@ export class ClientsPage {
   readonly newCustomerCode = signal('');
   readonly newCustomerFeedback = signal<string | null>(null);
   readonly newCustomerError = signal<string | null>(null);
-  readonly canAddCustomer = computed(() => !this.requiresScopedConsultantForManualAdd());
+  readonly needsManualConsultantSelection = computed(
+    () => this.requiresScopedConsultantForManualAdd() && this.selectedConsultantId() == null
+  );
+  readonly canAddCustomer = computed(
+    () => !this.needsManualConsultantSelection() || this.manualConsultantId() != null
+  );
   readonly canForwardOrder = computed(() => {
     const usernames = (
       (environment as { operationalUsernames?: string[] }).operationalUsernames ?? [
@@ -69,6 +76,7 @@ export class ClientsPage {
 
   constructor() {
     this.destroyRef.onDestroy(() => this.rememberContext());
+    this.loadManualConsultantsIfNeeded();
 
     this.route.queryParamMap
       .pipe(
@@ -76,6 +84,9 @@ export class ClientsPage {
           const raw = params.get('consultantId');
           const consultantId = raw ? Number(raw) : null;
           this.selectedConsultantId.set(consultantId);
+          if (consultantId != null) {
+            this.manualConsultantId.set(consultantId);
+          }
           this.restoreContextForScope(consultantId);
           return consultantId;
         }),
@@ -116,14 +127,23 @@ export class ClientsPage {
     this.newCustomerFeedback.set(null);
   }
 
+  setManualConsultantId(value: string | number | null): void {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      this.manualConsultantId.set(parsed);
+    } else {
+      this.manualConsultantId.set(null);
+    }
+    this.newCustomerError.set(null);
+    this.newCustomerFeedback.set(null);
+  }
+
   addCustomer(): void {
     if (this.addingCustomer()) {
       return;
     }
     if (!this.canAddCustomer()) {
-      this.newCustomerError.set(
-        'Selecione um consultor no dashboard para cadastrar cliente neste escopo.'
-      );
+      this.newCustomerError.set('Selecione um consultor para cadastrar cliente neste escopo.');
       return;
     }
 
@@ -137,16 +157,17 @@ export class ClientsPage {
     this.addingCustomer.set(true);
     this.newCustomerError.set(null);
     this.newCustomerFeedback.set(null);
-    const consultantId = this.selectedConsultantId();
+    const currentScopeId = this.selectedConsultantId();
+    const targetConsultantId = this.resolveTargetConsultantIdForManualAdd();
     this.dashboardService
       .addCustomer({
         customerName,
         customerCode: customerCode || null,
-        consultantId
+        consultantId: targetConsultantId
       })
       .pipe(
         switchMap((response) =>
-          this.loadScopeData(consultantId).pipe(map((data) => ({ response, data })))
+          this.loadScopeData(currentScopeId).pipe(map((data) => ({ response, data })))
         ),
         takeUntilDestroyed(this.destroyRef)
       )
@@ -357,18 +378,47 @@ export class ClientsPage {
       .trim();
   }
 
-  private requiresScopedConsultantForManualAdd(): boolean {
+  private resolveTargetConsultantIdForManualAdd(): number | null {
+    return this.selectedConsultantId() ?? this.manualConsultantId();
+  }
+
+  private loadManualConsultantsIfNeeded(): void {
+    if (!this.hasGlobalScopeForManualAdd()) {
+      return;
+    }
+    this.dashboardService
+      .getConsultants()
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (consultants) => {
+          const sorted = [...consultants].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+          this.manualConsultants.set(sorted);
+          if (this.selectedConsultantId() == null && this.manualConsultantId() == null && sorted.length === 1) {
+            this.manualConsultantId.set(sorted[0].id);
+          }
+        },
+        error: () => {
+          this.manualConsultants.set([]);
+        }
+      });
+  }
+
+  private hasGlobalScopeForManualAdd(): boolean {
     const user = this.auth.currentUser();
     if (!user) {
-      return true;
+      return false;
     }
-    const financialUsernames = (
-      (environment as { financialUsernames?: string[] }).financialUsernames ?? []
-    )
+    const username = String(user.username || '').trim().toLowerCase();
+    return user.role === 'admin' || this.financialUsernames().includes(username);
+  }
+
+  private financialUsernames(): string[] {
+    return ((environment as { financialUsernames?: string[] }).financialUsernames ?? [])
       .map((item) => String(item || '').trim().toLowerCase())
       .filter(Boolean);
-    const username = String(user.username || '').trim().toLowerCase();
-    const hasGlobalScope = user.role === 'admin' || financialUsernames.includes(username);
-    return hasGlobalScope && this.selectedConsultantId() == null;
+  }
+
+  private requiresScopedConsultantForManualAdd(): boolean {
+    return this.hasGlobalScopeForManualAdd() && this.selectedConsultantId() == null;
   }
 }

@@ -64,9 +64,47 @@ export class AuthService {
       }
       const parsed = JSON.parse(raw) as AuthSession;
       if (!parsed?.user?.username || !parsed.accessToken) {
+        localStorage.removeItem(SESSION_KEY);
+        return null;
+      }
+      if (!environment.useMockApi && !this.isStoredJwtTokenValid(parsed.accessToken)) {
+        localStorage.removeItem(SESSION_KEY);
         return null;
       }
       return parsed;
+    } catch {
+      localStorage.removeItem(SESSION_KEY);
+      return null;
+    }
+  }
+
+  private isStoredJwtTokenValid(token: string): boolean {
+    const payload = this.decodeJwtPayload(token);
+    const exp = payload?.['exp'];
+    if (typeof exp !== 'number' || !Number.isFinite(exp)) {
+      return false;
+    }
+    return exp * 1000 > Date.now();
+  }
+
+  private decodeJwtPayload(token: string): Record<string, unknown> | null {
+    const parts = String(token || '').split('.');
+    if (parts.length !== 3) {
+      return null;
+    }
+    const encodedPayload = parts[1];
+    if (!encodedPayload || typeof window === 'undefined' || typeof window.atob !== 'function') {
+      return null;
+    }
+    try {
+      let normalized = encodedPayload.replace(/-/g, '+').replace(/_/g, '/');
+      const remainder = normalized.length % 4;
+      if (remainder > 0) {
+        normalized += '='.repeat(4 - remainder);
+      }
+      const decoded = window.atob(normalized);
+      const payload = JSON.parse(decoded) as Record<string, unknown>;
+      return payload;
     } catch {
       return null;
     }

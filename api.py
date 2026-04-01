@@ -2459,7 +2459,7 @@ def login(payload: dict) -> dict:
 def consultants(authorization: str | None = Header(default=None)) -> list[dict]:
     user = get_current_user_from_header(authorization)
     available = list_consultants()
-    if user.is_admin or is_operational_username(user.username):
+    if user.is_admin or is_operational_username(user.username) or is_financial_username(user.username):
         return [
             {
                 "id": int(item["id"]),

@@ -45,6 +45,20 @@
         />
       </label>
     </div>
+    @if (needsManualConsultantSelection()) {
+      <label class="manual-consultant-field">
+        Consultor do cadastro
+        <select
+          [ngModel]="manualConsultantId() ?? ''"
+          (ngModelChange)="setManualConsultantId($event)"
+        >
+          <option value="">Selecione um consultor</option>
+          @for (consultant of manualConsultants(); track consultant.id) {
+            <option [value]="consultant.id">{{ consultant.name }}</option>
+          }
+        </select>
+      </label>
+    }
     <div class="add-customer-actions">
       <button
         type="button"
@@ -59,9 +73,14 @@
         }
       </button>
     </div>
-    @if (!canAddCustomer()) {
+    @if (needsManualConsultantSelection() && !canAddCustomer()) {
       <p class="add-customer-hint">
-        Selecione um consultor no Dashboard para cadastrar cliente neste escopo.
+        Selecione um consultor no campo acima ou no filtro de escopo do Dashboard.
+      </p>
+    }
+    @if (needsManualConsultantSelection() && manualConsultants().length === 0) {
+      <p class="add-customer-error">
+        Nao foi possivel carregar os consultores para este cadastro.
       </p>
     }
     @if (newCustomerFeedback()) {
