@@ -445,6 +445,9 @@
             @if (order.statusReason) {
               <p><strong>Motivo:</strong> {{ order.statusReason }}</p>
             }
+            @if (orderObservations(order); as observations) {
+              <p class="observations-text"><strong>Observações:</strong> {{ observations }}</p>
+            }
             @if (order.distribution.approvals?.length) {
               <div class="approval-log">
                 <p><strong>Registro de assinaturas (data/hora):</strong></p>
@@ -482,6 +485,9 @@
                         - {{ event.message }}
                       }
                     </p>
+                    @if (eventObservations(event); as observations) {
+                      <p class="event-observations"><strong>Observações:</strong> {{ observations }}</p>
+                    }
                   </li>
                 }
               </ul>

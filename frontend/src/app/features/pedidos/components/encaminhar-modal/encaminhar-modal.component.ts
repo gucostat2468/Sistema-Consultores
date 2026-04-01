@@ -36,6 +36,7 @@ export class EncaminharModalComponent implements OnChanges {
     customerName: ['', [Validators.required, Validators.maxLength(220)]],
     orderValue: [null as number | null, [Validators.required, Validators.min(0.01)]],
     recipientEmails: [''],
+    observations: ['', [Validators.maxLength(1200)]],
     attachClientAnalysis: [true]
   });
 
@@ -139,6 +140,7 @@ export class EncaminharModalComponent implements OnChanges {
 
     const payload = this.form.getRawValue();
     const recipientEmailsRaw = String(payload.recipientEmails ?? '').trim();
+    const observations = String(payload.observations ?? '').trim();
     const recipientEmails = this.normalizeRecipientEmails(recipientEmailsRaw);
     const routeByEmail = recipientEmails.length > 0;
     if (recipientEmailsRaw.length > 0 && !this.areAllEmailsValid(recipientEmails)) {
@@ -160,6 +162,7 @@ export class EncaminharModalComponent implements OnChanges {
         customerIdDoc: String(payload.customerIdDoc ?? '').trim() || null,
         routeByEmail,
         recipientEmails: routeByEmail ? recipientEmails.join(', ') : null,
+        observations: observations || null,
         attachClientAnalysis: payload.attachClientAnalysis !== false
       })
       .pipe(finalize(() => this.loading.set(false)))
@@ -196,6 +199,7 @@ export class EncaminharModalComponent implements OnChanges {
       customerName: this.client.customerName,
       orderValue: null,
       recipientEmails: '',
+      observations: '',
       attachClientAnalysis: true
     });
     this.selectedFile.set(null);

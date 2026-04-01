@@ -381,6 +381,10 @@ th {
   font-size: 0.8rem;
 }
 
+.observations-text {
+  white-space: pre-line;
+}
+
 .approval-log {
   margin-top: 0.45rem;
   border-top: 1px solid #e6ebe3;
@@ -426,6 +430,11 @@ th {
 
 .event-list li p {
   margin: 0;
+}
+
+.event-observations {
+  margin-top: 0.18rem;
+  white-space: pre-line;
 }
 
 .signature-block h4 {

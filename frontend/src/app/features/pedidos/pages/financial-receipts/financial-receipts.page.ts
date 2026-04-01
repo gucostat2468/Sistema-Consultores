@@ -190,6 +190,22 @@ export class FinancialReceiptsPage implements OnDestroy {
     return order.signedByName || '-';
   }
 
+  orderObservations(order: ApprovalOrderItem): string | null {
+    const raw = order.distribution?.observations;
+    const text = typeof raw === 'string' ? raw.trim() : '';
+    return text || null;
+  }
+
+  eventObservations(event: OrderStatusDetail['events'][number]): string | null {
+    const payload = event?.payload;
+    if (!payload || typeof payload !== 'object') {
+      return null;
+    }
+    const raw = (payload as Record<string, unknown>)['observations'];
+    const text = typeof raw === 'string' ? raw.trim() : '';
+    return text || null;
+  }
+
   statusLabel(status: ApprovalOrderItem['status'] | string): string {
     if (status === 'CONCLUIDO' || status === 'FATURADO') {
       return 'Concluído';

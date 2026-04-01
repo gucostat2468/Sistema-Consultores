@@ -56,6 +56,16 @@
               <span class="field-error">{{ message }}</span>
             }
           </label>
+          <label class="full">
+            Observações
+            <textarea
+              formControlName="observations"
+              rows="3"
+              maxlength="1200"
+              placeholder="Digite observações relevantes para este encaminhamento."
+            ></textarea>
+            <span class="field-hint">Campo opcional para contexto adicional do pedido.</span>
+          </label>
           <label class="full checkbox-row">
             <input type="checkbox" formControlName="attachClientAnalysis" />
             <span>Anexar relatório de saúde financeira do cliente junto ao pedido</span>

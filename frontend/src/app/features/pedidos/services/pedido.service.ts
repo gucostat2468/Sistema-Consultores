@@ -49,6 +49,13 @@ export interface ApprovalOrderItem {
       success: boolean;
       error: string | null;
     }>;
+    observations?: string | null;
+    routeByEmail?: boolean;
+    manualRecipients?: string[];
+    attachClientAnalysis?: boolean;
+    analysisPdfGenerated?: boolean;
+    smtpConfigured?: boolean;
+    warnings?: string[];
   };
   originalPdfPath: string;
   signedPdfPath: string | null;
@@ -149,6 +156,7 @@ export class PedidoService {
     customerIdDoc?: string | null;
     routeByEmail?: boolean;
     recipientEmails?: string | null;
+    observations?: string | null;
     attachClientAnalysis?: boolean;
   }): Observable<ForwardOrderResponse> {
     const formData = new FormData();
@@ -172,6 +180,9 @@ export class PedidoService {
     }
     if (payload.routeByEmail && payload.recipientEmails) {
       formData.append('recipientEmails', payload.recipientEmails);
+    }
+    if (payload.observations) {
+      formData.append('observations', payload.observations);
     }
     return this.http.post<ForwardOrderResponse>(`${this.baseUrl}/encaminhar`, formData);
   }

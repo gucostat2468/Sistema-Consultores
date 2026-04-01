@@ -3221,6 +3221,7 @@ async def pedidos_encaminhar(
     customerIdDoc: str | None = Form(default=None),
     routeByEmail: str | bool = Form(default=False),
     recipientEmails: str | None = Form(default=None),
+    observations: str | None = Form(default=None),
     attachClientAnalysis: str | bool = Form(default=True),
     authorization: str | None = Header(default=None),
 ) -> dict:
@@ -3256,6 +3257,10 @@ async def pedidos_encaminhar(
     attach_client_analysis = to_bool(attachClientAnalysis)
     route_by_email = to_bool(routeByEmail)
     manual_recipients = split_email_targets(recipientEmails if route_by_email else None)
+    observations_text = str(observations or "").strip()
+    if len(observations_text) > 1200:
+        raise HTTPException(status_code=400, detail="Observacoes devem ter no maximo 1200 caracteres.")
+    observations_block = f"Observacoes: {observations_text}\n" if observations_text else ""
     if route_by_email and not manual_recipients:
         raise HTTPException(
             status_code=400,
@@ -3376,6 +3381,7 @@ async def pedidos_encaminhar(
                 "orderValue": cents_to_brl(order_value_cents),
                 "routeByEmail": route_by_email,
                 "manualRecipients": manual_recipients,
+                "observations": observations_text or None,
                 "attachClientAnalysis": attach_client_analysis,
             },
         )
@@ -3392,6 +3398,7 @@ async def pedidos_encaminhar(
                     f"Cliente: {resolved_customer_name}\n"
                     f"Valor: R$ {cents_to_brl(order_value_cents):,.2f}\n"
                     f"Etapa atual: {status_stage_label(status)}\n"
+                    f"{observations_block}"
                     f"Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
                     f"Painel de Status: {ORDER_APPROVAL_PANEL_URL}\n"
                 )
@@ -3429,6 +3436,7 @@ async def pedidos_encaminhar(
                     f"Cliente: {resolved_customer_name}\n"
                     f"Valor: R$ {cents_to_brl(order_value_cents):,.2f}\n"
                     f"Status atual: {status_stage_label(status)}\n\n"
+                    f"{observations_block}"
                     f"Painel de Status: {ORDER_APPROVAL_PANEL_URL}\n"
                 )
                 success, error_message = send_email_with_optional_pdf(
@@ -3467,6 +3475,7 @@ async def pedidos_encaminhar(
                     "recipients": recipients,
                     "manualRecipients": manual_forwarded,
                     "routeByEmail": route_by_email,
+                    "observations": observations_text or None,
                 },
             )
         else:
@@ -3489,6 +3498,7 @@ async def pedidos_encaminhar(
                     f"Saldo em aberto: R$ {cents_to_brl(int(credit_snapshot['openBalanceCents'])):,.2f}\n"
                     f"Limite de credito: R$ {cents_to_brl(int(credit_snapshot['creditLimitCents'])):,.2f}\n"
                     f"Excesso: R$ {cents_to_brl(int(credit_snapshot['overLimitCents'])):,.2f}\n\n"
+                    f"{observations_block}"
                     "Status registrado como NEGADO_SEM_LIMITE. Cadastre/atualize o limite para seguir para assinatura."
                 )
                 success, error_message = send_email_with_optional_pdf(
@@ -3525,6 +3535,7 @@ async def pedidos_encaminhar(
                     f"Cliente: {resolved_customer_name}\n"
                     f"Valor: R$ {cents_to_brl(order_value_cents):,.2f}\n"
                     f"Status atual: {status}\n\n"
+                    f"{observations_block}"
                     "Observacao: cliente sem limite cadastrado, fluxo segue para tratativa.\n"
                     f"Painel de Status: {ORDER_APPROVAL_PANEL_URL}\n"
                 )
@@ -3564,6 +3575,7 @@ async def pedidos_encaminhar(
                     "recipients": deduped,
                     "manualRecipients": manual_forwarded,
                     "routeByEmail": route_by_email,
+                    "observations": observations_text or None,
                 },
             )
 
@@ -3615,6 +3627,7 @@ async def pedidos_encaminhar(
                         "smtpConfigured": bool(SMTP_HOST),
                         "routeByEmail": route_by_email,
                         "manualRecipients": manual_recipients,
+                        "observations": observations_text or None,
                         "attachClientAnalysis": attach_client_analysis,
                         "analysisPdfGenerated": bool(analysis_pdf_path),
                         "warnings": warnings,

@@ -249,6 +249,10 @@ th {
   font-size: 0.8rem;
 }
 
+.observations-text {
+  white-space: pre-line;
+}
+
 .signature-log {
   border: 1px solid #e6ebe3;
   border-radius: 10px;
@@ -300,6 +304,11 @@ th {
 
 .event-list li p {
   margin: 0;
+}
+
+.event-observations {
+  margin-top: 0.18rem;
+  white-space: pre-line;
 }
 
 @media (max-width: 1260px) {
@@ -415,4 +424,3 @@ th {
     height: min(36dvh, 300px);
   }
 }
-

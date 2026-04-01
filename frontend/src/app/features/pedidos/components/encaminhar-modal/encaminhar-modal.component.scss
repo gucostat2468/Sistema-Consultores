@@ -88,6 +88,15 @@ input {
   padding: 0.58rem 0.64rem;
 }
 
+textarea {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.58rem 0.64rem;
+  resize: vertical;
+  min-height: 4.5rem;
+  font: inherit;
+}
+
 input[type='checkbox'] {
   width: 1rem;
   height: 1rem;
