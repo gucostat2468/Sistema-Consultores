@@ -46,6 +46,12 @@ export class ClientsPage {
   readonly creditLookup = computed(() => buildCreditLookupMaps(this.creditItems()));
   readonly modalClient = signal<ClientHealth | null>(null);
   readonly orderFeedback = signal<string | null>(null);
+  readonly addingCustomer = signal(false);
+  readonly newCustomerName = signal('');
+  readonly newCustomerCode = signal('');
+  readonly newCustomerFeedback = signal<string | null>(null);
+  readonly newCustomerError = signal<string | null>(null);
+  readonly canAddCustomer = computed(() => !this.requiresScopedConsultantForManualAdd());
   readonly canForwardOrder = computed(() => {
     const usernames = (
       (environment as { operationalUsernames?: string[] }).operationalUsernames ?? [
@@ -76,10 +82,7 @@ export class ClientsPage {
         distinctUntilChanged(),
         switchMap((consultantId) => {
           this.loading.set(true);
-          return forkJoin({
-            clientHealth: this.dashboardService.getClientHealth(consultantId),
-            creditLimits: this.dashboardService.getCreditLimits(consultantId)
-          });
+          return this.loadScopeData(consultantId);
         }),
         takeUntilDestroyed(this.destroyRef)
       )
@@ -99,6 +102,76 @@ export class ClientsPage {
   setStatus(value: 'Todos' | ClientHealth['status']): void {
     this.statusFilter.set(value);
     this.rememberContext();
+  }
+
+  setNewCustomerName(value: string): void {
+    this.newCustomerName.set(value);
+    this.newCustomerError.set(null);
+    this.newCustomerFeedback.set(null);
+  }
+
+  setNewCustomerCode(value: string): void {
+    this.newCustomerCode.set(value);
+    this.newCustomerError.set(null);
+    this.newCustomerFeedback.set(null);
+  }
+
+  addCustomer(): void {
+    if (this.addingCustomer()) {
+      return;
+    }
+    if (!this.canAddCustomer()) {
+      this.newCustomerError.set(
+        'Selecione um consultor no dashboard para cadastrar cliente neste escopo.'
+      );
+      return;
+    }
+
+    const customerName = this.newCustomerName().trim();
+    const customerCode = this.newCustomerCode().trim();
+    if (!customerName) {
+      this.newCustomerError.set('Informe o nome do cliente.');
+      return;
+    }
+
+    this.addingCustomer.set(true);
+    this.newCustomerError.set(null);
+    this.newCustomerFeedback.set(null);
+    const consultantId = this.selectedConsultantId();
+    this.dashboardService
+      .addCustomer({
+        customerName,
+        customerCode: customerCode || null,
+        consultantId
+      })
+      .pipe(
+        switchMap((response) =>
+          this.loadScopeData(consultantId).pipe(map((data) => ({ response, data })))
+        ),
+        takeUntilDestroyed(this.destroyRef)
+      )
+      .subscribe({
+        next: ({ response, data }) => {
+          this.items.set(data.clientHealth);
+          this.creditItems.set(data.creditLimits.items);
+          this.search.set('');
+          this.statusFilter.set('Todos');
+          this.newCustomerName.set('');
+          this.newCustomerCode.set('');
+          this.newCustomerFeedback.set(
+            response.item.created
+              ? `Cliente ${response.item.customerName} cadastrado com sucesso.`
+              : `Cliente ${response.item.customerName} já existia e foi mantido na lista.`
+          );
+          this.rememberContext();
+          this.addingCustomer.set(false);
+        },
+        error: (error: { error?: { detail?: string }; message?: string }) => {
+          const detail = error.error?.detail ?? error.message ?? 'Falha ao cadastrar cliente.';
+          this.newCustomerError.set(String(detail));
+          this.addingCustomer.set(false);
+        }
+      });
   }
 
   get filtered(): ClientHealth[] {
@@ -225,6 +298,13 @@ export class ClientsPage {
     });
   }
 
+  private loadScopeData(consultantId: number | null) {
+    return forkJoin({
+      clientHealth: this.dashboardService.getClientHealth(consultantId),
+      creditLimits: this.dashboardService.getCreditLimits(consultantId)
+    });
+  }
+
   private restoreContextForScope(consultantId: number | null): void {
     if (typeof window === 'undefined') {
       return;
@@ -279,5 +359,20 @@ export class ClientsPage {
       .toUpperCase()
       .replace(/[^A-Z0-9]+/g, ' ')
       .trim();
+  }
+
+  private requiresScopedConsultantForManualAdd(): boolean {
+    const user = this.auth.currentUser();
+    if (!user) {
+      return true;
+    }
+    const financialUsernames = (
+      (environment as { financialUsernames?: string[] }).financialUsernames ?? []
+    )
+      .map((item) => String(item || '').trim().toLowerCase())
+      .filter(Boolean);
+    const username = String(user.username || '').trim().toLowerCase();
+    const hasGlobalScope = user.role === 'admin' || financialUsernames.includes(username);
+    return hasGlobalScope && this.selectedConsultantId() == null;
   }
 }

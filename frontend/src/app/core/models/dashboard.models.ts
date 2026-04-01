@@ -34,6 +34,14 @@ export interface ClientHealth {
   action: string;
 }
 
+export interface DashboardCustomerItem {
+  consultantId: number;
+  consultantName: string;
+  customerName: string;
+  customerCode: string;
+  created: boolean;
+}
+
 export interface ReceivableItem {
   id: number;
   consultantId: number;

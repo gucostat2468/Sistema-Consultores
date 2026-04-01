@@ -32,6 +32,57 @@ select {
   padding: 0.6rem;
 }
 
+.add-customer-block {
+  margin: 0.2rem 0.45rem 0.45rem;
+  padding: 0.75rem;
+  border: 1px solid #e3e9e1;
+  border-radius: 12px;
+  background: #f9fbf7;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.add-customer-block h4 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.add-customer-block > p {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 0.8rem;
+}
+
+.add-customer-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.add-customer-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.add-customer-feedback,
+.add-customer-error,
+.add-customer-hint {
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.add-customer-feedback {
+  color: #145847;
+}
+
+.add-customer-error {
+  color: #9a2a2a;
+}
+
+.add-customer-hint {
+  color: #5d6f6a;
+}
+
 .table-head,
 .table-row {
   display: grid;
@@ -200,6 +251,10 @@ select {
 
 @media (max-width: 900px) {
   .filters {
+    grid-template-columns: 1fr;
+  }
+
+  .add-customer-grid {
     grid-template-columns: 1fr;
   }
 }

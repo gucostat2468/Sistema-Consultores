@@ -850,6 +850,44 @@ def fetch_receivables_for_user(
     return [dict(row) for row in rows]
 
 
+def fetch_consultant_customers_for_user(
+    user: AuthenticatedUser,
+    selected_consultant_id: int | None = None,
+) -> list[dict]:
+    where_sql = "WHERE cc.consultant_id = ?"
+    params: list[int] = [user.id]
+
+    username_key = str(user.username or "").strip().lower()
+    has_full_read_scope = user.is_admin or username_key in FINANCIAL_READ_USERNAMES
+
+    if has_full_read_scope:
+        if selected_consultant_id is None:
+            where_sql = ""
+            params = []
+        else:
+            where_sql = "WHERE cc.consultant_id = ?"
+            params = [selected_consultant_id]
+
+    query = f"""
+        SELECT
+            cc.consultant_id,
+            c.name AS consultant_name,
+            c.username AS consultant_username,
+            cust.id AS customer_id,
+            cust.name AS customer_name,
+            COALESCE(cust.customer_code, '') AS customer_code
+        FROM consultant_customers cc
+        JOIN consultants c ON c.id = cc.consultant_id
+        JOIN customers cust ON cust.id = cc.customer_id
+        {where_sql}
+        ORDER BY c.name ASC, cust.name ASC, cust.id ASC
+    """
+
+    with get_connection() as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+    return [dict(row) for row in rows]
+
+
 def fetch_credit_limits_for_user(
     user: AuthenticatedUser,
     selected_consultant_id: int | None = None,
@@ -894,6 +932,57 @@ def fetch_credit_limits_for_user(
     with get_connection() as conn:
         rows = conn.execute(query, tuple(params)).fetchall()
     return [dict(row) for row in rows]
+
+
+def upsert_consultant_customer(
+    *,
+    consultant_id: int,
+    customer_name: str,
+    customer_code: str | None = None,
+) -> dict:
+    cleaned_name = normalize_spaces(customer_name)
+    if not cleaned_name:
+        raise ValueError("Nome do cliente obrigatorio.")
+    cleaned_code = normalize_customer_code(customer_code)
+
+    with get_connection() as conn:
+        customer_id, _, created = get_or_create_customer(
+            conn=conn,
+            consultant_id=int(consultant_id),
+            customer_name=cleaned_name,
+            customer_code=cleaned_code,
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO consultant_customers (consultant_id, customer_id)
+            VALUES (?, ?)
+            """,
+            (int(consultant_id), int(customer_id)),
+        )
+
+        row = conn.execute(
+            """
+            SELECT
+                cc.consultant_id,
+                c.name AS consultant_name,
+                c.username AS consultant_username,
+                cust.id AS customer_id,
+                cust.name AS customer_name,
+                COALESCE(cust.customer_code, '') AS customer_code
+            FROM consultant_customers cc
+            JOIN consultants c ON c.id = cc.consultant_id
+            JOIN customers cust ON cust.id = cc.customer_id
+            WHERE cc.consultant_id = ? AND cc.customer_id = ?
+            LIMIT 1
+            """,
+            (int(consultant_id), int(customer_id)),
+        ).fetchone()
+        if not row:
+            raise ValueError("Falha ao vincular cliente ao consultor.")
+
+    payload = dict(row)
+    payload["created"] = bool(created)
+    return payload
 
 
 def fetch_customer_import_hints() -> dict[str, dict[str, str | None]]:

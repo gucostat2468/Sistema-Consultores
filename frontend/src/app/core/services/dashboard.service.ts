@@ -6,6 +6,7 @@ import {
   ClientHealth,
   Consultant,
   CreditAlert,
+  DashboardCustomerItem,
   CreditLimitItem,
   CreditLimitsResponse,
   CreditSummary,
@@ -62,6 +63,35 @@ export class DashboardService {
     return this.http.get<CreditLimitsResponse>(`${environment.apiBaseUrl}/dashboard/credit-limits`, {
       params
     });
+  }
+
+  addCustomer(payload: {
+    customerName: string;
+    customerCode?: string | null;
+    consultantId?: number | null;
+  }): Observable<{ item: DashboardCustomerItem }> {
+    if (environment.useMockApi) {
+      const session = this.auth.currentUser();
+      return of({
+        item: {
+          consultantId: payload.consultantId ?? session?.id ?? 0,
+          consultantName: session?.name ?? 'Consultor',
+          customerName: payload.customerName.trim(),
+          customerCode: String(payload.customerCode ?? '').trim(),
+          created: true
+        }
+      }).pipe(delay(160));
+    }
+
+    const formData = new FormData();
+    formData.append('customerName', payload.customerName);
+    if (payload.customerCode) {
+      formData.append('customerCode', payload.customerCode);
+    }
+    if (payload.consultantId != null) {
+      formData.append('consultantId', String(payload.consultantId));
+    }
+    return this.http.post<{ item: DashboardCustomerItem }>(`${environment.apiBaseUrl}/dashboard/customers`, formData);
   }
 
   private scopeReceivables(selectedConsultantId?: number | null): ReceivableItem[] {

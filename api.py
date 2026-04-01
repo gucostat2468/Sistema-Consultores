@@ -33,6 +33,7 @@ from src.db import (
     authenticate_user,
     ensure_admin_user,
     finalize_ingestion_batch,
+    fetch_consultant_customers_for_user,
     fetch_customer_import_hints,
     fetch_document_consultant_hints,
     fetch_credit_limits_for_user,
@@ -51,6 +52,7 @@ from src.db import (
     stage_credit_limit_records,
     stage_receivables_records,
     start_ingestion_batch,
+    upsert_consultant_customer,
     update_consultant_email,
 )
 from src.credit_excel_parser import parse_credit_excel
@@ -700,224 +702,311 @@ def evaluate_credit_penalty_for_client(
     }
 
 
+def build_client_scope_key(
+    consultant_id: int,
+    customer_code: str | None,
+    customer_name: str | None,
+) -> tuple[int, str]:
+    normalized_code = str(customer_code or "").strip()
+    if normalized_code.lower() in {"nan", "none", "null", "<na>"}:
+        normalized_code = ""
+    if normalized_code:
+        return int(consultant_id), f"code::{normalized_code.upper()}"
+    return int(consultant_id), f"name::{normalize_customer_key(str(customer_name or ''))}"
+
+
 def build_client_health_for_api(
     df: pd.DataFrame,
     *,
     credit_rows: list[dict] | None = None,
+    customer_rows: list[dict] | None = None,
 ) -> list[dict]:
-    if df.empty:
-        return []
-
-    enriched = build_enriched_receivables(df, today=date.today())
-    if "customer_name" in enriched.columns:
-        enriched = enriched.copy()
-        enriched["customer_name"] = enriched["customer_name"].map(sanitize_company_name)
     credit_lookup = build_credit_lookup_for_client_health(credit_rows or [])
     records: list[dict] = []
+    existing_keys: set[tuple[int, str]] = set()
 
-    for keys, group in enriched.groupby(
-        ["consultant_id", "consultant_name", "customer_name", "customer_code"], as_index=False
-    ):
-        consultant_id, consultant_name, customer_name, customer_code = keys
-        balances = pd.to_numeric(group["balance_cents"], errors="coerce").fillna(0).astype(float)
-        days = pd.to_numeric(group["days_to_due"], errors="coerce").fillna(9_999).astype(float)
+    if not df.empty:
+        enriched = build_enriched_receivables(df, today=date.today())
+        if "customer_name" in enriched.columns:
+            enriched = enriched.copy()
+            enriched["customer_name"] = enriched["customer_name"].map(sanitize_company_name)
 
-        total_balance_cents = int(round(float(balances.sum())))
-        titles_count = int(len(group))
+        for keys, group in enriched.groupby(
+            ["consultant_id", "consultant_name", "customer_name", "customer_code"], as_index=False
+        ):
+            consultant_id, consultant_name, customer_name, customer_code = keys
+            normalized_customer_code = str(customer_code or "").strip()
+            if normalized_customer_code.lower() in {"nan", "none", "null", "<na>"}:
+                normalized_customer_code = ""
+            balances = pd.to_numeric(group["balance_cents"], errors="coerce").fillna(0).astype(float)
+            days = pd.to_numeric(group["days_to_due"], errors="coerce").fillna(9_999).astype(float)
 
-        overdue_mask = days < 0
-        due_7_mask = (days >= 0) & (days <= 7)
-        due_30_mask = (days >= 0) & (days <= 30)
-        due_15_mask = (days >= 0) & (days <= 15)
+            total_balance_cents = int(round(float(balances.sum())))
+            titles_count = int(len(group))
 
-        overdue_1_7_mask = (days >= -7) & (days <= -1)
-        overdue_8_30_mask = (days >= -30) & (days <= -8)
-        overdue_31_plus_mask = days <= -31
+            overdue_mask = days < 0
+            due_7_mask = (days >= 0) & (days <= 7)
+            due_30_mask = (days >= 0) & (days <= 30)
+            due_15_mask = (days >= 0) & (days <= 15)
 
-        due_8_15_mask = (days >= 8) & (days <= 15)
-        due_16_30_mask = (days >= 16) & (days <= 30)
+            overdue_1_7_mask = (days >= -7) & (days <= -1)
+            overdue_8_30_mask = (days >= -30) & (days <= -8)
+            overdue_31_plus_mask = days <= -31
 
-        overdue_cents = int(round(float(balances[overdue_mask].sum())))
-        due_7_cents = int(round(float(balances[due_7_mask].sum())))
-        due_30_cents = int(round(float(balances[due_30_mask].sum())))
-        due_15_cents = int(round(float(balances[due_15_mask].sum())))
+            due_8_15_mask = (days >= 8) & (days <= 15)
+            due_16_30_mask = (days >= 16) & (days <= 30)
 
-        overdue_1_7_cents = float(balances[overdue_1_7_mask].sum())
-        overdue_8_30_cents = float(balances[overdue_8_30_mask].sum())
-        overdue_31_plus_cents = float(balances[overdue_31_plus_mask].sum())
-        due_8_15_cents = float(balances[due_8_15_mask].sum())
-        due_16_30_cents = float(balances[due_16_30_mask].sum())
+            overdue_cents = int(round(float(balances[overdue_mask].sum())))
+            due_7_cents = int(round(float(balances[due_7_mask].sum())))
+            due_30_cents = int(round(float(balances[due_30_mask].sum())))
+            due_15_cents = int(round(float(balances[due_15_mask].sum())))
 
-        overdue_ratio = safe_ratio(overdue_cents, total_balance_cents)
-        due_15_ratio = safe_ratio(due_15_cents, total_balance_cents)
-        severe_overdue_ratio = safe_ratio(
-            int(round(overdue_8_30_cents + overdue_31_plus_cents)),
-            total_balance_cents,
-        )
+            overdue_1_7_cents = float(balances[overdue_1_7_mask].sum())
+            overdue_8_30_cents = float(balances[overdue_8_30_mask].sum())
+            overdue_31_plus_cents = float(balances[overdue_31_plus_mask].sum())
+            due_8_15_cents = float(balances[due_8_15_mask].sum())
+            due_16_30_cents = float(balances[due_16_30_mask].sum())
 
-        overdue_titles_count = int(overdue_mask.sum())
-        due_15_titles_count = int(due_15_mask.sum())
-        max_title_cents = float(balances.max()) if not balances.empty else 0.0
-        max_title_share = max_title_cents / total_balance_cents if total_balance_cents > 0 else 0.0
-        weighted_mean_days = (
-            float((balances * days.clip(lower=-45, upper=60)).sum() / total_balance_cents)
-            if total_balance_cents > 0
-            else 60.0
-        )
-
-        overdue_severity = (
-            max(
-                0.0,
-                min(
-                    1.0,
-                    (
-                        overdue_1_7_cents
-                        + overdue_8_30_cents * 1.4
-                        + overdue_31_plus_cents * 1.9
-                    )
-                    / total_balance_cents,
-                ),
+            overdue_ratio = safe_ratio(overdue_cents, total_balance_cents)
+            due_15_ratio = safe_ratio(due_15_cents, total_balance_cents)
+            severe_overdue_ratio = safe_ratio(
+                int(round(overdue_8_30_cents + overdue_31_plus_cents)),
+                total_balance_cents,
             )
-            if total_balance_cents > 0
-            else 0.0
-        )
-        near_pressure = (
-            max(
-                0.0,
-                min(
-                    1.0,
-                    (
-                        due_7_cents
-                        + due_8_15_cents * 0.65
-                        + due_16_30_cents * 0.35
-                    )
-                    / total_balance_cents,
-                ),
-            )
-            if total_balance_cents > 0
-            else 0.0
-        )
-        title_stress = (
-            max(
-                0.0,
-                min(
-                    1.0,
-                    (overdue_titles_count / titles_count) * 0.75
-                    + (due_15_titles_count / titles_count) * 0.25,
-                ),
-            )
-            if titles_count > 0
-            else 0.0
-        )
-        concentration_risk = max(0.0, min(1.0, (max_title_share - 0.35) / 0.65))
-        trajectory_risk = max(0.0, min(1.0, (12.0 - weighted_mean_days) / 57.0))
 
-        base_penalty = (
-            overdue_severity * 60.0
-            + near_pressure * 14.0
-            + title_stress * 6.0
-            + concentration_risk * 6.0
-            + trajectory_risk * 6.0
-        )
-        escalation_penalty = (
-            max(0.0, overdue_ratio - 0.35) * 35.0
-            + max(0.0, severe_overdue_ratio - 0.2) * 20.0
-        )
+            overdue_titles_count = int(overdue_mask.sum())
+            due_15_titles_count = int(due_15_mask.sum())
+            max_title_cents = float(balances.max()) if not balances.empty else 0.0
+            max_title_share = max_title_cents / total_balance_cents if total_balance_cents > 0 else 0.0
+            weighted_mean_days = (
+                float((balances * days.clip(lower=-45, upper=60)).sum() / total_balance_cents)
+                if total_balance_cents > 0
+                else 60.0
+            )
 
-        credit_key = (int(consultant_id), normalize_customer_key(str(customer_name or "")))
+            overdue_severity = (
+                max(
+                    0.0,
+                    min(
+                        1.0,
+                        (
+                            overdue_1_7_cents
+                            + overdue_8_30_cents * 1.4
+                            + overdue_31_plus_cents * 1.9
+                        )
+                        / total_balance_cents,
+                    ),
+                )
+                if total_balance_cents > 0
+                else 0.0
+            )
+            near_pressure = (
+                max(
+                    0.0,
+                    min(
+                        1.0,
+                        (
+                            due_7_cents
+                            + due_8_15_cents * 0.65
+                            + due_16_30_cents * 0.35
+                        )
+                        / total_balance_cents,
+                    ),
+                )
+                if total_balance_cents > 0
+                else 0.0
+            )
+            title_stress = (
+                max(
+                    0.0,
+                    min(
+                        1.0,
+                        (overdue_titles_count / titles_count) * 0.75
+                        + (due_15_titles_count / titles_count) * 0.25,
+                    ),
+                )
+                if titles_count > 0
+                else 0.0
+            )
+            concentration_risk = max(0.0, min(1.0, (max_title_share - 0.35) / 0.65))
+            trajectory_risk = max(0.0, min(1.0, (12.0 - weighted_mean_days) / 57.0))
+
+            base_penalty = (
+                overdue_severity * 60.0
+                + near_pressure * 14.0
+                + title_stress * 6.0
+                + concentration_risk * 6.0
+                + trajectory_risk * 6.0
+            )
+            escalation_penalty = (
+                max(0.0, overdue_ratio - 0.35) * 35.0
+                + max(0.0, severe_overdue_ratio - 0.2) * 20.0
+            )
+
+            credit_key = (int(consultant_id), normalize_customer_key(str(customer_name or "")))
+            credit_eval = evaluate_credit_penalty_for_client(
+                total_balance_cents=total_balance_cents,
+                overdue_ratio=overdue_ratio,
+                due_15_ratio=due_15_ratio,
+                credit_snapshot=credit_lookup.get(credit_key),
+            )
+            has_limit = bool(credit_eval["hasLimit"])
+            coverage_ratio = float(credit_eval["coverageRatio"])
+            debt_to_limit_ratio = float(credit_eval["debtToLimitRatio"])
+            credit_available_cents = int(credit_eval["creditAvailableCents"])
+            raw_score = 100.0 - base_penalty - escalation_penalty - float(credit_eval["penalty"])
+            positive_bonus = 0.0
+            if has_limit and total_balance_cents > 0:
+                if overdue_ratio <= 0.01:
+                    positive_bonus += 3.5
+                if severe_overdue_ratio <= 0.02:
+                    positive_bonus += 1.5
+                if debt_to_limit_ratio <= 0.75:
+                    positive_bonus += 3.0
+                elif debt_to_limit_ratio <= 0.90:
+                    positive_bonus += 1.5
+                if coverage_ratio >= 0.30:
+                    positive_bonus += 1.5
+                if due_15_ratio <= 0.35:
+                    positive_bonus += 1.0
+            elif not has_limit and overdue_ratio <= 0.01 and due_15_ratio <= 0.20:
+                positive_bonus += 1.0
+
+            risk_score = int(round(max(0.0, min(100.0, raw_score))))
+            risk_score = int(round(max(0.0, min(100.0, risk_score + positive_bonus))))
+            score_cap = int(credit_eval["maxScoreCap"])
+            if score_cap < 100:
+                risk_score = min(risk_score, score_cap)
+
+            financial_status = classify_financial_status(
+                risk_score=risk_score,
+                overdue_ratio=overdue_ratio,
+                due_15_ratio=due_15_ratio,
+                severe_overdue_ratio=severe_overdue_ratio,
+            )
+            mapped_status = map_financial_status(financial_status)
+            if not has_limit and total_balance_cents > 0:
+                action = "Cliente sem limite cadastrado. Priorizar cadastro/revisao de limite antes de novas propostas."
+            elif has_limit and debt_to_limit_ratio > 1.0 and total_balance_cents > 0:
+                action = "Exposicao acima do limite de credito. Priorizar revisao de limite e tratativa comercial."
+            elif has_limit and debt_to_limit_ratio <= 0.85 and overdue_ratio <= 0.03 and total_balance_cents > 0:
+                action = "Cliente com limite e baixo risco de atraso. Cenario saudavel para continuidade comercial."
+            elif has_limit and credit_available_cents <= 0 and overdue_ratio <= 0.01 and total_balance_cents > 0:
+                action = "Limite totalmente utilizado no momento (sem folga), porem sem atraso relevante."
+            elif has_limit and credit_available_cents <= 0 and total_balance_cents > 0:
+                action = (
+                    "Limite totalmente utilizado com pressao financeira. "
+                    "Reforcar cobranca preventiva e revisao de limite."
+                )
+            elif has_limit and debt_to_limit_ratio >= 0.85 and total_balance_cents > 0:
+                action = "Limite proximo do teto de uso. Acompanhar recebimentos e revisar novas concessoes."
+            else:
+                action = {
+                    "Critico": "Contato imediato e plano de renegociacao antes de novas propostas.",
+                    "Atencao": "Contato preventivo para vencimentos proximos e revisao de limite.",
+                    "Saudavel": "Cliente apto para novas propostas com monitoramento padrao.",
+                }[mapped_status]
+
+            records.append(
+                {
+                    "consultantId": int(consultant_id),
+                    "consultantName": consultant_name,
+                    "customerName": sanitize_company_name(customer_name),
+                    "customerCode": normalized_customer_code,
+                    "totalBalance": cents_to_brl(total_balance_cents),
+                    "overdue": cents_to_brl(overdue_cents),
+                    "due7": cents_to_brl(due_7_cents),
+                    "due30": cents_to_brl(due_30_cents),
+                    "titles": titles_count,
+                    "score": risk_score,
+                    "status": mapped_status,
+                    "action": action,
+                    "scoreModel": {
+                        "basePenalty": float(round(base_penalty, 2)),
+                        "escalationPenalty": float(round(escalation_penalty, 2)),
+                        "creditPenalty": float(round(float(credit_eval["penalty"]), 2)),
+                        "positiveBonus": float(round(positive_bonus, 2)),
+                        "hasCreditLimit": has_limit,
+                        "creditCoverageRatio": float(round(coverage_ratio, 4)),
+                        "debtToLimitRatio": float(round(float(credit_eval["debtToLimitRatio"]), 4)),
+                        "creditLimit": cents_to_brl(int(credit_eval["creditLimitCents"])),
+                        "creditAvailable": cents_to_brl(int(credit_eval["creditAvailableCents"])),
+                        "scoreCap": score_cap,
+                        "flags": credit_eval["flags"],
+                    },
+                }
+            )
+            existing_keys.add(
+                build_client_scope_key(
+                    int(consultant_id),
+                    normalized_customer_code,
+                    str(customer_name),
+                )
+            )
+
+    for row in customer_rows or []:
+        consultant_id = int(row.get("consultant_id") or 0)
+        if consultant_id <= 0:
+            continue
+        consultant_name = str(row.get("consultant_name") or "").strip()
+        customer_name = sanitize_company_name(str(row.get("customer_name") or ""))
+        customer_code = str(row.get("customer_code") or "").strip()
+        if not customer_name:
+            continue
+
+        customer_key = build_client_scope_key(
+            consultant_id,
+            customer_code,
+            customer_name,
+        )
+        if customer_key in existing_keys:
+            continue
+
+        credit_key = (consultant_id, normalize_customer_key(customer_name))
         credit_eval = evaluate_credit_penalty_for_client(
-            total_balance_cents=total_balance_cents,
-            overdue_ratio=overdue_ratio,
-            due_15_ratio=due_15_ratio,
+            total_balance_cents=0,
+            overdue_ratio=0.0,
+            due_15_ratio=0.0,
             credit_snapshot=credit_lookup.get(credit_key),
         )
         has_limit = bool(credit_eval["hasLimit"])
-        coverage_ratio = float(credit_eval["coverageRatio"])
-        debt_to_limit_ratio = float(credit_eval["debtToLimitRatio"])
-        credit_available_cents = int(credit_eval["creditAvailableCents"])
-        raw_score = 100.0 - base_penalty - escalation_penalty - float(credit_eval["penalty"])
-        positive_bonus = 0.0
-        if has_limit and total_balance_cents > 0:
-            if overdue_ratio <= 0.01:
-                positive_bonus += 3.5
-            if severe_overdue_ratio <= 0.02:
-                positive_bonus += 1.5
-            if debt_to_limit_ratio <= 0.75:
-                positive_bonus += 3.0
-            elif debt_to_limit_ratio <= 0.90:
-                positive_bonus += 1.5
-            if coverage_ratio >= 0.30:
-                positive_bonus += 1.5
-            if due_15_ratio <= 0.35:
-                positive_bonus += 1.0
-        elif not has_limit and overdue_ratio <= 0.01 and due_15_ratio <= 0.20:
-            positive_bonus += 1.0
-
-        risk_score = int(round(max(0.0, min(100.0, raw_score))))
-        risk_score = int(round(max(0.0, min(100.0, risk_score + positive_bonus))))
-        score_cap = int(credit_eval["maxScoreCap"])
-        if score_cap < 100:
-            risk_score = min(risk_score, score_cap)
-
-        financial_status = classify_financial_status(
-            risk_score=risk_score,
-            overdue_ratio=overdue_ratio,
-            due_15_ratio=due_15_ratio,
-            severe_overdue_ratio=severe_overdue_ratio,
-        )
-        mapped_status = map_financial_status(financial_status)
-        if not has_limit and total_balance_cents > 0:
-            action = "Cliente sem limite cadastrado. Priorizar cadastro/revisao de limite antes de novas propostas."
-        elif has_limit and debt_to_limit_ratio > 1.0 and total_balance_cents > 0:
-            action = "Exposicao acima do limite de credito. Priorizar revisao de limite e tratativa comercial."
-        elif has_limit and debt_to_limit_ratio <= 0.85 and overdue_ratio <= 0.03 and total_balance_cents > 0:
-            action = "Cliente com limite e baixo risco de atraso. Cenario saudavel para continuidade comercial."
-        elif has_limit and credit_available_cents <= 0 and overdue_ratio <= 0.01 and total_balance_cents > 0:
-            action = "Limite totalmente utilizado no momento (sem folga), porem sem atraso relevante."
-        elif has_limit and credit_available_cents <= 0 and total_balance_cents > 0:
-            action = "Limite totalmente utilizado com pressao financeira. Reforcar cobranca preventiva e revisao de limite."
-        elif has_limit and debt_to_limit_ratio >= 0.85 and total_balance_cents > 0:
-            action = "Limite proximo do teto de uso. Acompanhar recebimentos e revisar novas concessoes."
-        else:
-            action = {
-                "Critico": "Contato imediato e plano de renegociacao antes de novas propostas.",
-                "Atencao": "Contato preventivo para vencimentos proximos e revisao de limite.",
-                "Saudavel": "Cliente apto para novas propostas com monitoramento padrao.",
-            }[mapped_status]
-
         records.append(
             {
-                "consultantId": int(consultant_id),
+                "consultantId": consultant_id,
                 "consultantName": consultant_name,
-                "customerName": sanitize_company_name(customer_name),
-                "customerCode": str(customer_code),
-                "totalBalance": cents_to_brl(total_balance_cents),
-                "overdue": cents_to_brl(overdue_cents),
-                "due7": cents_to_brl(due_7_cents),
-                "due30": cents_to_brl(due_30_cents),
-                "titles": titles_count,
-                "score": risk_score,
-                "status": mapped_status,
-                "action": action,
+                "customerName": customer_name,
+                "customerCode": customer_code,
+                "totalBalance": 0,
+                "overdue": 0,
+                "due7": 0,
+                "due30": 0,
+                "titles": 0,
+                "score": 100,
+                "status": "Saudavel",
+                "action": (
+                    "Cliente cadastrado manualmente sem titulos em aberto no momento."
+                    if has_limit
+                    else "Cliente sem limite cadastrado. Priorizar cadastro/revisao de limite antes de novas propostas."
+                ),
                 "scoreModel": {
-                    "basePenalty": float(round(base_penalty, 2)),
-                    "escalationPenalty": float(round(escalation_penalty, 2)),
-                    "creditPenalty": float(round(float(credit_eval["penalty"]), 2)),
-                    "positiveBonus": float(round(positive_bonus, 2)),
+                    "basePenalty": 0.0,
+                    "escalationPenalty": 0.0,
+                    "creditPenalty": 0.0,
+                    "positiveBonus": 0.0,
                     "hasCreditLimit": has_limit,
-                    "creditCoverageRatio": float(round(coverage_ratio, 4)),
-                    "debtToLimitRatio": float(round(float(credit_eval["debtToLimitRatio"]), 4)),
+                    "creditCoverageRatio": 1.0,
+                    "debtToLimitRatio": 0.0,
                     "creditLimit": cents_to_brl(int(credit_eval["creditLimitCents"])),
                     "creditAvailable": cents_to_brl(int(credit_eval["creditAvailableCents"])),
-                    "scoreCap": score_cap,
+                    "scoreCap": 100,
                     "flags": credit_eval["flags"],
                 },
             }
         )
+        existing_keys.add(customer_key)
 
     records.sort(key=lambda item: item["totalBalance"], reverse=True)
     return records
-
 
 def build_summary_for_api(df: pd.DataFrame) -> dict:
     if df.empty:
@@ -2381,8 +2470,13 @@ def dashboard_client_health(
     user = get_current_user_from_header(authorization)
     rows = fetch_receivables_for_user(user=user, selected_consultant_id=consultantId)
     credit_rows = fetch_credit_limits_for_user(user=user, selected_consultant_id=consultantId)
+    customer_rows = fetch_consultant_customers_for_user(user=user, selected_consultant_id=consultantId)
     df = rows_to_dataframe(rows)
-    return build_client_health_for_api(df, credit_rows=credit_rows)
+    return build_client_health_for_api(
+        df,
+        credit_rows=credit_rows,
+        customer_rows=customer_rows,
+    )
 
 
 @app.get("/api/dashboard/credit-limits")
@@ -2394,6 +2488,56 @@ def dashboard_credit_limits(
     credit_rows = fetch_credit_limits_for_user(user=user, selected_consultant_id=consultantId)
     receivable_rows = fetch_receivables_for_user(user=user, selected_consultant_id=consultantId)
     return build_credit_limits_for_api(credit_rows=credit_rows, receivable_rows=receivable_rows)
+
+
+@app.post("/api/dashboard/customers")
+def dashboard_add_customer(
+    customerName: str = Form(...),
+    customerCode: str | None = Form(default=None),
+    consultantId: int | None = Form(default=None),
+    authorization: str | None = Header(default=None),
+) -> dict:
+    user = get_current_user_from_header(authorization)
+    customer_name = sanitize_company_name(customerName)
+    if not customer_name:
+        raise HTTPException(status_code=400, detail="Nome do cliente obrigatorio.")
+
+    requested_consultant_id = int(consultantId) if consultantId is not None else None
+    has_full_scope = user.is_admin or is_financial_username(user.username)
+    if has_full_scope:
+        if requested_consultant_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Informe o consultor para cadastrar cliente neste escopo.",
+            )
+        target_consultant_id = requested_consultant_id
+    else:
+        target_consultant_id = int(user.id)
+        if requested_consultant_id is not None and requested_consultant_id != target_consultant_id:
+            raise HTTPException(status_code=403, detail="Sem permissao para cadastrar cliente para este consultor.")
+
+    consultant = get_consultant_by_id(target_consultant_id)
+    if not consultant or not consultant.get("is_active"):
+        raise HTTPException(status_code=400, detail="Consultor informado nao esta ativo.")
+
+    try:
+        created = upsert_consultant_customer(
+            consultant_id=target_consultant_id,
+            customer_name=customer_name,
+            customer_code=customerCode,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "item": {
+            "consultantId": int(created["consultant_id"]),
+            "consultantName": str(created.get("consultant_name") or ""),
+            "customerName": str(created.get("customer_name") or ""),
+            "customerCode": str(created.get("customer_code") or ""),
+            "created": bool(created.get("created")),
+        }
+    }
 
 
 @app.get("/api/admin/ingestion/history")
@@ -4714,3 +4858,4 @@ def frontend_spa_or_asset(full_path: str):
         return FileResponse(FRONTEND_INDEX_FILE)
 
     raise HTTPException(status_code=404, detail="Rota nao encontrada.")
+
