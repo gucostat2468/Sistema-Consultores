@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from email.message import EmailMessage
 from io import BytesIO
@@ -11,7 +11,6 @@ import hashlib
 import json
 import os
 import re
-import secrets
 import sqlite3
 import smtplib
 import ssl
@@ -21,6 +20,7 @@ import unicodedata
 import uuid
 
 import pandas as pd
+import jwt
 from pypdf import PdfReader, PdfWriter
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
@@ -85,6 +85,9 @@ VITOR_FINANCIAL_USERNAME = os.getenv("VITOR_FINANCIAL_USERNAME", "vitor_financei
 DEFAULT_VITOR_FINANCIAL_PASSWORD = os.getenv("VITOR_FINANCIAL_PASSWORD", "dronepro2026")
 DEFAULT_REPORT_CONSULTANT = "CARTEIRA GERAL (SEM CONSULTOR)"
 TOKEN_STORE: dict[str, AuthenticatedUser] = {}
+AUTH_JWT_ALGORITHM = "HS256"
+AUTH_JWT_SECRET = os.getenv("AUTH_JWT_SECRET", "trocar-token-em-producao")
+AUTH_TOKEN_TTL_SECONDS = max(300, int(os.getenv("AUTH_TOKEN_TTL_SECONDS", str(12 * 60 * 60))))
 
 CUSTOMER_NAME_CORRECTIONS = {
     "AGRODRONE SOLU ES AGRICOLAS LTDA": "AGRODRONE SOLUCOES AGRICOLAS LTDA",
@@ -493,7 +496,17 @@ def credit_alert_priority(alert: str) -> int:
 
 
 def build_auth_session(user: AuthenticatedUser) -> dict:
-    token = secrets.token_urlsafe(32)
+    issued_at = datetime.now(timezone.utc)
+    payload = {
+        "sub": str(user.id),
+        "username": user.username,
+        "name": user.name,
+        "isAdmin": bool(user.is_admin),
+        "email": user.email,
+        "iat": int(issued_at.timestamp()),
+        "exp": int((issued_at + timedelta(seconds=AUTH_TOKEN_TTL_SECONDS)).timestamp()),
+    }
+    token = jwt.encode(payload, AUTH_JWT_SECRET, algorithm=AUTH_JWT_ALGORITHM)
     TOKEN_STORE[token] = user
     return {
         "accessToken": token,
@@ -514,10 +527,39 @@ def get_current_user_from_header(authorization: str | None) -> AuthenticatedUser
     if len(parts) != 2 or parts[0].lower() != "bearer":
         raise HTTPException(status_code=401, detail="Formato de token invalido.")
     token = parts[1].strip()
-    user = TOKEN_STORE.get(token)
-    if not user:
+    if not token:
+        raise HTTPException(status_code=401, detail="Token ausente.")
+
+    cached_user = TOKEN_STORE.get(token)
+    if cached_user:
+        return cached_user
+
+    try:
+        payload = jwt.decode(token, AUTH_JWT_SECRET, algorithms=[AUTH_JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError as exc:
+        raise HTTPException(status_code=401, detail="Token expirado. Faca login novamente.") from exc
+    except jwt.InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail="Token invalido ou expirado.") from exc
+
+    username = str(payload.get("username") or "").strip()
+    name = str(payload.get("name") or "").strip()
+    user_id_raw = payload.get("sub")
+    try:
+        user_id = int(str(user_id_raw).strip())
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Token invalido ou expirado.") from exc
+    if user_id <= 0 or not username or not name:
         raise HTTPException(status_code=401, detail="Token invalido ou expirado.")
-    return user
+
+    restored_user = AuthenticatedUser(
+        id=user_id,
+        name=name,
+        username=username,
+        is_admin=bool(payload.get("isAdmin", False)),
+        email=str(payload.get("email") or "").strip() or None,
+    )
+    TOKEN_STORE[token] = restored_user
+    return restored_user
 
 
 def ensure_admin(user: AuthenticatedUser) -> None:
