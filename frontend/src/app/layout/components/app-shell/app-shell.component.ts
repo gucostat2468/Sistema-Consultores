@@ -71,10 +71,24 @@ export class AppShellComponent {
     const username = String(this.user()?.username || '').trim().toLowerCase();
     return usernames.includes(username);
   });
+  readonly isStockManager = computed(() => {
+    const usernames = (
+      (environment as { stockManagerUsernames?: string[] }).stockManagerUsernames ?? [
+        'gerente_estoque',
+        'estoque'
+      ]
+    )
+      .map((item) => String(item || '').trim().toLowerCase())
+      .filter(Boolean);
+    const username = String(this.user()?.username || '').trim().toLowerCase();
+    return usernames.includes(username);
+  });
   readonly canAccessStatus = computed(() => this.isCommercialDirector());
   readonly canAccessApprovals = computed(() => this.isIsabel());
+  readonly canAccessStockManager = computed(() => this.isStockManager());
   readonly canAccessReportUpdate = computed(() => this.isOperationalUser());
   readonly canAccessFinancialReceipts = computed(() => this.isFinancialUser() || this.isOperationalUser());
+  readonly showGeneralNavigation = computed(() => !this.isStockManager());
   readonly navQueryParams = computed(() => {
     const consultantId = this.selectedConsultantId();
     return consultantId ? { consultantId } : {};
@@ -155,6 +169,10 @@ export class AppShellComponent {
     }
     if (url.includes('/aprovacoes')) {
       this.routeTitle.set('Aprovacoes');
+      return;
+    }
+    if (url.includes('/estoque')) {
+      this.routeTitle.set('Estoque');
       return;
     }
     if (url.includes('/concluidos') || url.includes('/comprovantes-financeiros')) {

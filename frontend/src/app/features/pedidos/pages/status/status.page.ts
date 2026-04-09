@@ -41,6 +41,7 @@ const FROZEN_SIGNATURE_STATUSES: ApprovalOrderStatus[] = [
 ];
 
 const LIVE_REFRESH_INTERVAL_MS = 2500;
+const ELAPSED_TICK_MS = 1000;
 
 @Component({
   selector: 'app-status-page',
@@ -114,6 +115,7 @@ export class StatusPage implements OnDestroy {
   readonly orderSignatureUrl = signal<SafeResourceUrl | null>(null);
   readonly orderSignatureLoading = signal(false);
   readonly decisionEvents = signal<OrderStatusDetail['events']>([]);
+  readonly elapsedNow = signal(Date.now());
   readonly adminEmails = signal<AdminEmailItem[]>([]);
   readonly adminDraftEmail = signal<Record<number, string>>({});
   readonly hasSignature = signal(false);
@@ -165,16 +167,19 @@ export class StatusPage implements OnDestroy {
   private analysisPreviewObjectUrl: string | null = null;
   private orderSignatureObjectUrl: string | null = null;
   private liveRefreshHandle: ReturnType<typeof setInterval> | null = null;
+  private elapsedClockHandle: ReturnType<typeof setInterval> | null = null;
   private liveRefreshBusy = false;
 
   constructor() {
     this.refreshSavedSignatureState();
     this.loadMainData();
     this.startLiveRefresh();
+    this.startElapsedClock();
   }
 
   ngOnDestroy(): void {
     this.stopLiveRefresh();
+    this.stopElapsedClock();
     this.revokePreview();
   }
 
@@ -296,6 +301,7 @@ export class StatusPage implements OnDestroy {
     }
     if (
       order.status === 'AGUARDANDO_ASSINATURA_ISABEL' ||
+      order.status === 'AGUARDANDO_ASSINATURA_GERENTE_ESTOQUE' ||
       order.status === 'ASSINADO_AGUARDANDO_DISTRIBUICAO' ||
       order.status === 'CONCLUIDO' ||
       order.status === 'FATURADO' ||
@@ -528,6 +534,9 @@ export class StatusPage implements OnDestroy {
     if (status === 'AGUARDANDO_ASSINATURA_ISABEL') {
       return 'Aguardando Isabel';
     }
+    if (status === 'AGUARDANDO_ASSINATURA_GERENTE_ESTOQUE') {
+      return 'Aguardando Gerente de Estoque';
+    }
     if (status === 'NEGADO_SEM_LIMITE') {
       return 'Negado sem limite';
     }
@@ -556,6 +565,9 @@ export class StatusPage implements OnDestroy {
       status === 'DEVOLVIDO_REVISAO'
     ) {
       return 'Diretor Comercial';
+    }
+    if (status === 'AGUARDANDO_ASSINATURA_GERENTE_ESTOQUE') {
+      return 'Gerente de Estoque';
     }
     return 'responsável da etapa';
   }
@@ -621,6 +633,16 @@ export class StatusPage implements OnDestroy {
     const raw = (payload as Record<string, unknown>)['observations'];
     const text = typeof raw === 'string' ? raw.trim() : '';
     return text || null;
+  }
+
+  cycleElapsedLabel(order: ApprovalOrderItem): string {
+    const startedAt = this.parseIsoDate(order.createdAt);
+    if (!startedAt) {
+      return '-';
+    }
+    const end = this.resolveCycleEndDate(order) ?? this.elapsedNow();
+    const elapsedMs = Math.max(0, end - startedAt.getTime());
+    return this.formatDuration(elapsedMs);
   }
 
   importFileLabel(file: IngestionHistoryFile): string {
@@ -780,6 +802,18 @@ export class StatusPage implements OnDestroy {
     if (this.liveRefreshHandle) {
       clearInterval(this.liveRefreshHandle);
       this.liveRefreshHandle = null;
+    }
+  }
+
+  private startElapsedClock(): void {
+    this.stopElapsedClock();
+    this.elapsedClockHandle = setInterval(() => this.elapsedNow.set(Date.now()), ELAPSED_TICK_MS);
+  }
+
+  private stopElapsedClock(): void {
+    if (this.elapsedClockHandle) {
+      clearInterval(this.elapsedClockHandle);
+      this.elapsedClockHandle = null;
     }
   }
 
@@ -1065,6 +1099,39 @@ export class StatusPage implements OnDestroy {
 
   private isSpreadsheetFile(fileType: string): boolean {
     return String(fileType).trim().toLowerCase() === 'excel';
+  }
+
+  private resolveCycleEndDate(order: ApprovalOrderItem): number | null {
+    const isClosed = order.status === 'CONCLUIDO' || order.status === 'FATURADO';
+    if (!isClosed) {
+      return null;
+    }
+    const finalStamp = this.parseIsoDate(order.signedAt);
+    return finalStamp ? finalStamp.getTime() : null;
+  }
+
+  private parseIsoDate(value: string | null | undefined): Date | null {
+    const raw = String(value || '').trim();
+    if (!raw) {
+      return null;
+    }
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) {
+      return null;
+    }
+    return parsed;
+  }
+
+  private formatDuration(totalMs: number): string {
+    const totalSeconds = Math.floor(totalMs / 1000);
+    const days = Math.floor(totalSeconds / 86400);
+    const hours = Math.floor((totalSeconds % 86400) / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (days > 0) {
+      return `${days}d ${String(hours).padStart(2, '0')}h ${String(minutes).padStart(2, '0')}m`;
+    }
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
   }
 
   private signatureStorageKey(): string | null {

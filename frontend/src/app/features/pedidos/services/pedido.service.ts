@@ -6,6 +6,7 @@ import { environment } from '../../../../environments/environment';
 export type ApprovalOrderStatus =
   | 'AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL'
   | 'AGUARDANDO_ASSINATURA_ISABEL'
+  | 'AGUARDANDO_ASSINATURA_GERENTE_ESTOQUE'
   | 'NEGADO_SEM_LIMITE'
   | 'DEVOLVIDO_REVISAO'
   | 'ASSINADO_AGUARDANDO_DISTRIBUICAO'
@@ -233,6 +234,28 @@ export class PedidoService {
       params = params.set('limit', String(filters.limit));
     }
     return this.http.get<{ items: ApprovalOrderItem[] }>(`${this.baseUrl}/comprovantes`, { params });
+  }
+
+  listStockQueue(filters: {
+    customer?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    limit?: number;
+  } = {}): Observable<{ items: ApprovalOrderItem[] }> {
+    let params = new HttpParams();
+    if (filters.customer) {
+      params = params.set('customer', filters.customer);
+    }
+    if (filters.dateFrom) {
+      params = params.set('dateFrom', filters.dateFrom);
+    }
+    if (filters.dateTo) {
+      params = params.set('dateTo', filters.dateTo);
+    }
+    if (filters.limit != null) {
+      params = params.set('limit', String(filters.limit));
+    }
+    return this.http.get<{ items: ApprovalOrderItem[] }>(`${this.baseUrl}/estoque`, { params });
   }
 
   getSummary(): Observable<ApprovalSummary> {

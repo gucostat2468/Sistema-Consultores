@@ -5,7 +5,7 @@
 } @else {
   <section class="card intro">
     <h2>Status de Aprovação Digital</h2>
-    <p>Fila da assinatura do Diretor Comercial antes de seguir para a sessão Aprovações da Isabel.</p>
+    <p>Fila da assinatura do Diretor Comercial antes de seguir para Aprovações da Isabel e conclusão no Estoque.</p>
     <p>Pedidos finalizados ficam disponíveis na sessão separada Concluídos.</p>
     <p>Atualização automática em tempo real para manter o fluxo em esteira sem bloqueios.</p>
   </section>
@@ -41,6 +41,7 @@
           <select formControlName="status">
             <option value="">Todos</option>
             <option value="AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL">Aguardando Diretor Comercial</option>
+            <option value="AGUARDANDO_ASSINATURA_GERENTE_ESTOQUE">Aguardando Gerente de Estoque</option>
             <option value="NEGADO_SEM_LIMITE">Negado sem limite</option>
             <option value="DEVOLVIDO_REVISAO">Devolvido revisão</option>
             <option value="ASSINADO_AGUARDANDO_DISTRIBUICAO">Assinado distribuindo</option>
@@ -104,12 +105,13 @@
             <th>Valor</th>
             <th>Consultor</th>
             <th>Status</th>
+            <th>Tempo de ciclo</th>
             <th>Ações</th>
           </tr>
         </thead>
         <tbody>
           @if (pendingItems().length === 0) {
-            <tr><td colspan="6">Nenhum pedido pendente.</td></tr>
+            <tr><td colspan="7">Nenhum pedido pendente.</td></tr>
           } @else {
             @for (item of pendingItems(); track item.id) {
               <tr>
@@ -118,6 +120,7 @@
                 <td data-label="Valor">{{ item.orderValue | currency: 'BRL' }}</td>
                 <td data-label="Consultor">{{ item.consultantName || '-' }}</td>
                 <td data-label="Status">{{ statusLabel(item.status) }}</td>
+                <td data-label="Tempo de ciclo">{{ cycleElapsedLabel(item) }}</td>
                 <td data-label="Ações">
                   <div class="row-actions">
                     <button type="button" (click)="openDecisionModal(item)">
@@ -160,12 +163,13 @@
             <th>Valor</th>
             <th>Excesso</th>
             <th>Motivo</th>
+            <th>Tempo de ciclo</th>
             <th>Ações</th>
           </tr>
         </thead>
         <tbody>
           @if (negativeItems().length === 0) {
-            <tr><td colspan="6">Nenhum pedido negado sem limite.</td></tr>
+            <tr><td colspan="7">Nenhum pedido negado sem limite.</td></tr>
           } @else {
             @for (item of negativeItems(); track item.id) {
               <tr>
@@ -174,6 +178,7 @@
                 <td data-label="Valor">{{ item.orderValue | currency: 'BRL' }}</td>
                 <td data-label="Excesso">{{ item.overLimit | currency: 'BRL' }}</td>
                 <td data-label="Motivo">{{ item.statusReason || 'Sem motivo registrado' }}</td>
+                <td data-label="Tempo de ciclo">{{ cycleElapsedLabel(item) }}</td>
                 <td data-label="Ações">
                   <div class="row-actions">
                     <button type="button" class="ghost" (click)="openDecisionModal(item)">
@@ -438,6 +443,7 @@
             <p><strong>Saldo aberto:</strong> {{ order.openBalance | currency: 'BRL' }}</p>
             <p><strong>Limite:</strong> {{ order.creditLimit | currency: 'BRL' }}</p>
             <p><strong>Excesso:</strong> {{ order.overLimit | currency: 'BRL' }}</p>
+            <p><strong>Tempo de ciclo:</strong> {{ cycleElapsedLabel(order) }}</p>
             @if (order.signedByName || order.signedAt) {
               <p><strong>Assinado por:</strong> {{ signatureResponsibleLabel(order) }}</p>
               <p><strong>Assinado em:</strong> {{ order.signedAt ? (order.signedAt | date: 'short') : '-' }}</p>

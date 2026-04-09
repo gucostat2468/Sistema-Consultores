@@ -83,6 +83,8 @@ DEFAULT_ISABEL_PASSWORD = os.getenv("ISABEL_PASSWORD", DEFAULT_ORDER_ADMIN_PASSW
 DEFAULT_MARCOS_PASSWORD = os.getenv("MARCOS_PASSWORD", DEFAULT_ORDER_ADMIN_PASSWORD)
 VITOR_FINANCIAL_USERNAME = os.getenv("VITOR_FINANCIAL_USERNAME", "vitor_financeiro").strip().lower()
 DEFAULT_VITOR_FINANCIAL_PASSWORD = os.getenv("VITOR_FINANCIAL_PASSWORD", "dronepro2026")
+STOCK_MANAGER_USERNAME = os.getenv("STOCK_MANAGER_USERNAME", "gerente_estoque").strip().lower()
+DEFAULT_STOCK_MANAGER_PASSWORD = os.getenv("STOCK_MANAGER_PASSWORD", DEFAULT_ORDER_ADMIN_PASSWORD)
 DEFAULT_REPORT_CONSULTANT = "CARTEIRA GERAL (SEM CONSULTOR)"
 TOKEN_STORE: dict[str, AuthenticatedUser] = {}
 AUTH_JWT_ALGORITHM = "HS256"
@@ -210,6 +212,25 @@ FINANCIAL_USERNAMES = {
     if username
 }
 
+DEFAULT_STOCK_MANAGER_USERNAMES = {
+    "gerente_estoque",
+    "estoque",
+}
+EXTRA_STOCK_MANAGER_USERNAMES = {
+    str(item or "").strip().lower()
+    for item in os.getenv("STOCK_MANAGER_USERNAMES", "").split(",")
+    if str(item or "").strip()
+}
+STOCK_MANAGER_USERNAMES = {
+    username
+    for username in (
+        DEFAULT_STOCK_MANAGER_USERNAMES
+        | EXTRA_STOCK_MANAGER_USERNAMES
+        | {STOCK_MANAGER_USERNAME}
+    )
+    if username
+}
+
 SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USERNAME = os.getenv("SMTP_USERNAME", "").strip() or None
@@ -235,6 +256,7 @@ SMTP_FROM = os.getenv("SMTP_FROM", "no-reply@dronepro.local").strip()
 ORDER_STATUS_LEGACY_AWAITING_FINANCIAL_SIGNATURE = "AGUARDANDO_ASSINATURA_DIRETOR_FINANCEIRO"
 ORDER_STATUS_AWAITING_COMMERCIAL_SIGNATURE = "AGUARDANDO_ASSINATURA_DIRETOR_COMERCIAL"
 ORDER_STATUS_AWAITING_SIGNATURE = "AGUARDANDO_ASSINATURA_ISABEL"
+ORDER_STATUS_AWAITING_STOCK_MANAGER_SIGNATURE = "AGUARDANDO_ASSINATURA_GERENTE_ESTOQUE"
 ORDER_STATUS_NEGATIVE = "NEGADO_SEM_LIMITE"
 ORDER_STATUS_RETURNED = "DEVOLVIDO_REVISAO"
 ORDER_STATUS_SIGNED_DISTRIBUTING = "ASSINADO_AGUARDANDO_DISTRIBUICAO"
@@ -244,6 +266,7 @@ ORDER_STATUS_DELETED = "EXCLUIDO"
 ORDER_STATUS_ALL = {
     ORDER_STATUS_AWAITING_COMMERCIAL_SIGNATURE,
     ORDER_STATUS_AWAITING_SIGNATURE,
+    ORDER_STATUS_AWAITING_STOCK_MANAGER_SIGNATURE,
     ORDER_STATUS_NEGATIVE,
     ORDER_STATUS_RETURNED,
     ORDER_STATUS_SIGNED_DISTRIBUTING,
@@ -575,6 +598,10 @@ def is_financial_username(username: str | None) -> bool:
     return str(username or "").strip().lower() in FINANCIAL_USERNAMES
 
 
+def is_stock_manager_username(username: str | None) -> bool:
+    return str(username or "").strip().lower() in STOCK_MANAGER_USERNAMES
+
+
 def is_commercial_director_username(username: str | None) -> bool:
     return str(username or "").strip().lower() in COMMERCIAL_DIRECTOR_USERNAMES
 
@@ -608,6 +635,12 @@ def ensure_financial_receipts_access(user: AuthenticatedUser) -> None:
     if is_financial_username(user.username) or is_operational_username(user.username):
         return
     raise HTTPException(status_code=403, detail="Acesso restrito ao time operacional autorizado.")
+
+
+def ensure_stock_manager_user(user: AuthenticatedUser) -> None:
+    if is_stock_manager_username(user.username):
+        return
+    raise HTTPException(status_code=403, detail="Acesso exclusivo do gerente de estoque.")
 
 
 def rows_to_dataframe(rows: list[dict]) -> pd.DataFrame:
@@ -1410,6 +1443,36 @@ def get_requester_email(conn, requester_user_id: int) -> str | None:
     return emails[0] if emails else None
 
 
+def list_stock_manager_email_targets(conn) -> list[str]:
+    env_targets = split_email_targets(os.getenv("STOCK_MANAGER_EMAIL", ""))
+
+    normalized_stock_users = {item.lower() for item in STOCK_MANAGER_USERNAMES}
+    stock_user_rows = conn.execute(
+        """
+        SELECT email
+        FROM consultants
+        WHERE is_active = 1
+          AND lower(username) IN ({})
+        """.format(", ".join("?" for _ in normalized_stock_users)),
+        tuple(normalized_stock_users),
+    ).fetchall() if normalized_stock_users else []
+
+    selected_targets: list[str] = []
+    seen_targets: set[str] = set()
+    for row in stock_user_rows:
+        for target in split_email_targets(row["email"]):
+            if target not in seen_targets:
+                seen_targets.add(target)
+                selected_targets.append(target)
+
+    for target in env_targets:
+        if target not in seen_targets:
+            seen_targets.add(target)
+            selected_targets.append(target)
+
+    return selected_targets
+
+
 def record_order_event(
     conn,
     *,
@@ -1606,6 +1669,8 @@ def status_stage_label(status: str) -> str:
         return "Diretor Comercial"
     if status == ORDER_STATUS_AWAITING_SIGNATURE:
         return "Isabel"
+    if status == ORDER_STATUS_AWAITING_STOCK_MANAGER_SIGNATURE:
+        return "Gerente de Estoque"
     if status == ORDER_STATUS_BILLED:
         return "Faturado"
     if status == ORDER_STATUS_DONE:
@@ -1622,6 +1687,8 @@ def next_status_for_signature(status: str) -> str | None:
     }:
         return ORDER_STATUS_AWAITING_SIGNATURE
     if status == ORDER_STATUS_AWAITING_SIGNATURE:
+        return ORDER_STATUS_AWAITING_STOCK_MANAGER_SIGNATURE
+    if status == ORDER_STATUS_AWAITING_STOCK_MANAGER_SIGNATURE:
         return ORDER_STATUS_DONE
     return None
 
@@ -2401,6 +2468,17 @@ def ensure_bootstrap_vitor_financeiro_user() -> None:
     )
 
 
+def ensure_bootstrap_stock_manager_user() -> None:
+    ensure_bootstrap_named_admin(
+        name="Gerente de Estoque",
+        username=STOCK_MANAGER_USERNAME,
+        password=DEFAULT_STOCK_MANAGER_PASSWORD,
+        email_env_key="STOCK_MANAGER_EMAIL",
+        is_admin=False,
+        legacy_usernames=["gerente_estoque", "estoque", "gerente-estoque"],
+    )
+
+
 def migrate_legacy_order_signature_status() -> None:
     with get_connection() as conn:
         conn.execute(
@@ -2429,6 +2507,7 @@ init_db()
 ensure_bootstrap_admin()
 ensure_bootstrap_isabel_and_marcos_admins()
 ensure_bootstrap_vitor_financeiro_user()
+ensure_bootstrap_stock_manager_user()
 migrate_legacy_order_signature_status()
 
 
@@ -3354,6 +3433,17 @@ def fetch_order_row_or_404(conn, order_id: int) -> dict:
 def ensure_order_access(user: AuthenticatedUser, order_row: dict) -> None:
     if is_operational_username(user.username):
         return
+    if is_stock_manager_username(user.username):
+        if order_row["status"] in {
+            ORDER_STATUS_AWAITING_STOCK_MANAGER_SIGNATURE,
+            ORDER_STATUS_DONE,
+            ORDER_STATUS_BILLED,
+        }:
+            return
+        raise HTTPException(
+            status_code=403,
+            detail="Gerente de estoque acessa apenas pedidos da fila de estoque ou concluidos.",
+        )
     if is_financial_username(user.username):
         if order_row["status"] != ORDER_STATUS_DELETED:
             return
@@ -3907,6 +3997,62 @@ def pedidos_status(
     return {"items": items}
 
 
+@app.get("/api/pedidos/estoque")
+def pedidos_estoque(
+    customer: str | None = None,
+    dateFrom: str | None = None,
+    dateTo: str | None = None,
+    limit: int = 300,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    user = get_current_user_from_header(authorization)
+    ensure_stock_manager_user(user)
+
+    filters: list[str] = ["o.status = ?"]
+    params: list[object] = [ORDER_STATUS_AWAITING_STOCK_MANAGER_SIGNATURE]
+    if customer:
+        filters.append("o.customer_name LIKE ?")
+        params.append(f"%{customer.strip()}%")
+    if dateFrom:
+        filters.append("substr(o.created_at, 1, 10) >= ?")
+        params.append(str(dateFrom))
+    if dateTo:
+        filters.append("substr(o.created_at, 1, 10) <= ?")
+        params.append(str(dateTo))
+
+    where_sql = f"WHERE {' AND '.join(filters)}"
+    capped_limit = max(1, min(int(limit), 20000))
+    params.append(capped_limit)
+
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                o.*,
+                cons.name AS consultant_name,
+                req.name AS requested_by_name,
+                signer.name AS signed_by_name
+            FROM order_requests o
+            JOIN consultants cons ON cons.id = o.consultant_id
+            JOIN consultants req ON req.id = o.requested_by_user_id
+            LEFT JOIN consultants signer ON signer.id = o.signed_by_user_id
+            {where_sql}
+            ORDER BY o.updated_at DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+
+    items = []
+    for row in rows:
+        payload = serialize_order_row(dict(row))
+        payload["consultantName"] = row["consultant_name"]
+        payload["requestedByName"] = row["requested_by_name"]
+        payload["signedByName"] = row["signed_by_name"]
+        items.append(payload)
+    return {"items": items}
+
+
 @app.get("/api/pedidos/resumo")
 def pedidos_resumo(
     authorization: str | None = Header(default=None),
@@ -3927,12 +4073,13 @@ def pedidos_resumo(
                 """
                 SELECT COUNT(*)
                 FROM order_requests
-                WHERE status IN (?, ?)
+                WHERE status IN (?, ?, ?)
                   AND status <> ?
                 """,
                 (
                     ORDER_STATUS_AWAITING_COMMERCIAL_SIGNATURE,
                     ORDER_STATUS_AWAITING_SIGNATURE,
+                    ORDER_STATUS_AWAITING_STOCK_MANAGER_SIGNATURE,
                     ORDER_STATUS_DELETED,
                 ),
             ).fetchone()[0]
@@ -4075,14 +4222,20 @@ def pedidos_assinar(
             ORDER_STATUS_NEGATIVE,
             ORDER_STATUS_RETURNED,
         }
+        is_isabel_stage_signature = current_status == ORDER_STATUS_AWAITING_SIGNATURE
+        is_stock_manager_stage_signature = current_status == ORDER_STATUS_AWAITING_STOCK_MANAGER_SIGNATURE
         if is_commercial_stage_signature:
             ensure_commercial_signature_user(user)
             stage_code = "comercial"
             stage_label = "Diretor Comercial"
-        elif current_status == ORDER_STATUS_AWAITING_SIGNATURE:
+        elif is_isabel_stage_signature:
             ensure_isabel(user)
             stage_code = "isabel"
             stage_label = "Isabel"
+        elif is_stock_manager_stage_signature:
+            ensure_stock_manager_user(user)
+            stage_code = "gerente_estoque"
+            stage_label = "Gerente de Estoque"
         else:
             raise HTTPException(status_code=409, detail="Pedido nao esta em etapa valida de assinatura.")
 
@@ -4191,7 +4344,7 @@ def pedidos_assinar(
                 recipients,
                 f"[Esteira assinatura] Isabel - Pedido {order_row['order_number']}",
                 (
-                    "Diretor Comercial concluiu a assinatura. Pedido segue para assinatura final da Isabel.\n\n"
+                    "Diretor Comercial concluiu a assinatura. Pedido segue para assinatura da Isabel.\n\n"
                     f"Pedido: {order_row['order_number']}\n"
                     f"Cliente: {order_row['customer_name']}\n"
                     f"Valor: R$ {cents_to_brl(int(order_row['order_value_cents'])):,.2f}\n"
@@ -4199,6 +4352,42 @@ def pedidos_assinar(
                     f"Painel de Status: {ORDER_APPROVAL_PANEL_URL}\n"
                 ),
                 attachment_for_isabel,
+            )
+        elif is_isabel_stage_signature:
+            original_pdf_path = Path(order_row["original_pdf_path"])
+            signed_pdf_path = ORDER_SIGNED_DIR / f"{order_row['external_id']}-signed.pdf"
+            _, final_size = generate_signed_order_pdf(
+                original_pdf_path=original_pdf_path,
+                signed_pdf_path=signed_pdf_path,
+                signature_image_path=signature_image_path,
+                order_number=order_row["order_number"],
+                customer_name=order_row["customer_name"],
+                order_value_cents=int(order_row["order_value_cents"]),
+                signed_by_name=user.name,
+                signature_mode=signature_mode,
+                signed_at_iso=signed_at_iso,
+                signature_hash=signature_hash,
+                approvals=approvals,
+            )
+
+            stock_manager_targets = list_stock_manager_email_targets(conn)
+            send_and_log(
+                "request_stock_manager_signature",
+                stock_manager_targets,
+                f"[Esteira assinatura] Estoque - Pedido {order_row['order_number']}",
+                (
+                    "Isabel concluiu a assinatura. Pedido segue para assinatura final do gerente de estoque.\n\n"
+                    f"Pedido: {order_row['order_number']}\n"
+                    f"Cliente: {order_row['customer_name']}\n"
+                    f"Valor: R$ {cents_to_brl(int(order_row['order_value_cents'])):,.2f}\n"
+                    f"Proxima etapa: {status_stage_label(ORDER_STATUS_AWAITING_STOCK_MANAGER_SIGNATURE)}\n\n"
+                    f"Painel de Status: {ORDER_APPROVAL_PANEL_URL}\n"
+                ),
+                signed_pdf_path if signed_pdf_path.exists() else None,
+            )
+            final_status = ORDER_STATUS_AWAITING_STOCK_MANAGER_SIGNATURE
+            stage_message = (
+                "Assinado por Isabel. Aguardando assinatura do gerente de estoque para liberar a entrega."
             )
         else:
             original_pdf_path = Path(order_row["original_pdf_path"])
@@ -4221,7 +4410,7 @@ def pedidos_assinar(
             vitor_targets = split_email_targets(config.get("vitor_emails"))
             marcos_targets = split_email_targets(config.get("marcos_emails"))
             isabel_targets = split_email_targets(config.get("isabel_emails"))
-            if user.email:
+            if is_isabel_username(user.username) and user.email:
                 isabel_targets.extend(split_email_targets(user.email))
 
             via3_targets = marcos_targets.copy()
@@ -4538,6 +4727,7 @@ def pedidos_excluir(
             raise HTTPException(status_code=409, detail="Solicitacao ja foi excluida.")
         if order_row["status"] in {
             ORDER_STATUS_AWAITING_SIGNATURE,
+            ORDER_STATUS_AWAITING_STOCK_MANAGER_SIGNATURE,
             ORDER_STATUS_SIGNED_DISTRIBUTING,
             ORDER_STATUS_DONE,
             ORDER_STATUS_BILLED,

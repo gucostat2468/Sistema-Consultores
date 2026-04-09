@@ -22,23 +22,25 @@
     </div>
 
     <nav class="nav">
-      <a routerLink="/app/dashboard" [queryParams]="navQueryParams()" routerLinkActive="active" (click)="closeMobileNav()">
-        Dashboard
-      </a>
-      <a routerLink="/app/clientes" [queryParams]="navQueryParams()" routerLinkActive="active" (click)="closeMobileNav()">
-        Clientes
-      </a>
-      <a routerLink="/app/titulos" [queryParams]="navQueryParams()" routerLinkActive="active" (click)="closeMobileNav()">
-        Titulos
-      </a>
-      <a
-        routerLink="/app/analise-cliente"
-        [queryParams]="navQueryParams()"
-        routerLinkActive="active"
-        (click)="closeMobileNav()"
-      >
-        Analise Cliente
-      </a>
+      @if (showGeneralNavigation()) {
+        <a routerLink="/app/dashboard" [queryParams]="navQueryParams()" routerLinkActive="active" (click)="closeMobileNav()">
+          Dashboard
+        </a>
+        <a routerLink="/app/clientes" [queryParams]="navQueryParams()" routerLinkActive="active" (click)="closeMobileNav()">
+          Clientes
+        </a>
+        <a routerLink="/app/titulos" [queryParams]="navQueryParams()" routerLinkActive="active" (click)="closeMobileNav()">
+          Titulos
+        </a>
+        <a
+          routerLink="/app/analise-cliente"
+          [queryParams]="navQueryParams()"
+          routerLinkActive="active"
+          (click)="closeMobileNav()"
+        >
+          Analise Cliente
+        </a>
+      }
       @if (canAccessStatus()) {
         <a routerLink="/app/status" [queryParams]="navQueryParams()" routerLinkActive="active" (click)="closeMobileNav()">
           Status
@@ -52,6 +54,16 @@
           (click)="closeMobileNav()"
         >
           Aprovações
+        </a>
+      }
+      @if (canAccessStockManager()) {
+        <a
+          routerLink="/app/estoque"
+          [queryParams]="navQueryParams()"
+          routerLinkActive="active"
+          (click)="closeMobileNav()"
+        >
+          Estoque
         </a>
       }
       @if (canAccessReportUpdate()) {
@@ -118,15 +130,20 @@
     </header>
 
     <nav class="mobile-sections" aria-label="Sessões do sistema">
-      <a routerLink="/app/dashboard" [queryParams]="navQueryParams()" routerLinkActive="active">Dashboard</a>
-      <a routerLink="/app/clientes" [queryParams]="navQueryParams()" routerLinkActive="active">Clientes</a>
-      <a routerLink="/app/titulos" [queryParams]="navQueryParams()" routerLinkActive="active">Titulos</a>
-      <a routerLink="/app/analise-cliente" [queryParams]="navQueryParams()" routerLinkActive="active">Analise</a>
+      @if (showGeneralNavigation()) {
+        <a routerLink="/app/dashboard" [queryParams]="navQueryParams()" routerLinkActive="active">Dashboard</a>
+        <a routerLink="/app/clientes" [queryParams]="navQueryParams()" routerLinkActive="active">Clientes</a>
+        <a routerLink="/app/titulos" [queryParams]="navQueryParams()" routerLinkActive="active">Titulos</a>
+        <a routerLink="/app/analise-cliente" [queryParams]="navQueryParams()" routerLinkActive="active">Analise</a>
+      }
       @if (canAccessStatus()) {
         <a routerLink="/app/status" [queryParams]="navQueryParams()" routerLinkActive="active">Status</a>
       }
       @if (canAccessApprovals()) {
         <a routerLink="/app/aprovacoes" [queryParams]="navQueryParams()" routerLinkActive="active">Aprovações</a>
+      }
+      @if (canAccessStockManager()) {
+        <a routerLink="/app/estoque" [queryParams]="navQueryParams()" routerLinkActive="active">Estoque</a>
       }
       @if (canAccessReportUpdate()) {
         <a routerLink="/app/atualizacao-report" [queryParams]="navQueryParams()" routerLinkActive="active">Atualização</a>

@@ -4,6 +4,7 @@ import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { finalize } from 'rxjs';
 import { AuthService } from '../../../../core/services/auth.service';
+import { environment } from '../../../../../environments/environment';
 
 @Component({
   selector: 'app-login-page',
@@ -44,7 +45,19 @@ export class LoginPage {
       .login(this.form.getRawValue())
       .pipe(finalize(() => this.loading.set(false)))
       .subscribe({
-        next: () => this.router.navigateByUrl('/app/dashboard'),
+        next: (session) => {
+          const stockManagerUsers = (
+            (environment as { stockManagerUsernames?: string[] }).stockManagerUsernames ?? [
+              'gerente_estoque',
+              'estoque'
+            ]
+          )
+            .map((item) => String(item || '').trim().toLowerCase())
+            .filter(Boolean);
+          const username = String(session.user?.username || '').trim().toLowerCase();
+          const target = stockManagerUsers.includes(username) ? '/app/estoque' : '/app/dashboard';
+          this.router.navigateByUrl(target);
+        },
         error: (error: unknown) => {
           if (error instanceof Error) {
             this.errorMessage.set(error.message || 'Falha no login. Tente novamente.');

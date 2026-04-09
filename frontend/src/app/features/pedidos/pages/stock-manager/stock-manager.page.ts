@@ -1,29 +1,24 @@
 import { CommonModule } from '@angular/common';
 import { Component, DestroyRef, ElementRef, OnDestroy, ViewChild, computed, inject, signal } from '@angular/core';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
-import { FormBuilder, FormsModule, ReactiveFormsModule, Validators } from '@angular/forms';
+import { FormBuilder, FormsModule, ReactiveFormsModule } from '@angular/forms';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { finalize } from 'rxjs/operators';
 import { environment } from '../../../../../environments/environment';
 import { AuthService } from '../../../../core/services/auth.service';
-import {
-  ApprovalOrderItem,
-  ApprovalOrderStatus,
-  OrderStatusDetail,
-  PedidoService
-} from '../../services/pedido.service';
+import { ApprovalOrderItem, ApprovalOrderStatus, OrderStatusDetail, PedidoService } from '../../services/pedido.service';
 
 const LIVE_REFRESH_INTERVAL_MS = 2500;
 const ELAPSED_TICK_MS = 1000;
 
 @Component({
-  selector: 'app-approvals-page',
+  selector: 'app-stock-manager-page',
   standalone: true,
   imports: [CommonModule, FormsModule, ReactiveFormsModule],
-  templateUrl: './approvals.page.html',
-  styleUrl: './approvals.page.scss'
+  templateUrl: './stock-manager.page.html',
+  styleUrl: './stock-manager.page.scss'
 })
-export class ApprovalsPage implements OnDestroy {
+export class StockManagerPage implements OnDestroy {
   private readonly pedidoService = inject(PedidoService);
   private readonly fb = inject(FormBuilder);
   private readonly sanitizer = inject(DomSanitizer);
@@ -32,20 +27,6 @@ export class ApprovalsPage implements OnDestroy {
 
   @ViewChild('signaturePad') signaturePad?: ElementRef<HTMLCanvasElement>;
   readonly user = this.auth.currentUser;
-  readonly isOperationalUser = computed(() => {
-    const usernames = (
-      (environment as { operationalUsernames?: string[] }).operationalUsernames ?? [
-        'isabel',
-        'isabel_dronepro',
-        'marcos',
-        'marcos_dronepro'
-      ]
-    )
-      .map((item) => String(item || '').trim().toLowerCase())
-      .filter(Boolean);
-    const username = String(this.user()?.username || '').trim().toLowerCase();
-    return usernames.includes(username);
-  });
 
   readonly loading = signal(true);
   readonly actionLoading = signal(false);
@@ -77,16 +58,12 @@ export class ApprovalsPage implements OnDestroy {
     dateTo: ['']
   });
 
-  readonly returnForm = this.fb.nonNullable.group({
-    reason: ['', [Validators.required, Validators.minLength(5), Validators.maxLength(800)]]
-  });
-
   readonly pendingItems = computed(() =>
-    this.items().filter((item) => item.status === 'AGUARDANDO_ASSINATURA_ISABEL')
+    this.items().filter((item) => item.status === 'AGUARDANDO_ASSINATURA_GERENTE_ESTOQUE')
   );
 
-  readonly forwardedToStockItems = computed(() =>
-    this.items().filter((item) => item.status === 'AGUARDANDO_ASSINATURA_GERENTE_ESTOQUE')
+  readonly completedItems = computed(() =>
+    this.items().filter((item) => item.status === 'CONCLUIDO' || item.status === 'FATURADO')
   );
 
   private drawing = false;
@@ -125,7 +102,6 @@ export class ApprovalsPage implements OnDestroy {
   openDecisionModal(order: ApprovalOrderItem): void {
     this.selectedOrder.set(order);
     this.decisionModalOpen.set(true);
-    this.returnForm.reset({ reason: '' });
     this.hasSignature.set(false);
     this.decisionEvents.set([]);
     this.errorMessage.set(null);
@@ -143,14 +119,13 @@ export class ApprovalsPage implements OnDestroy {
     this.decisionModalOpen.set(false);
     this.selectedOrder.set(null);
     this.decisionEvents.set([]);
-    this.returnForm.reset({ reason: '' });
     this.hasSignature.set(false);
     this.revokePreview();
   }
 
   signSelectedOrder(): void {
     const order = this.selectedOrder();
-    if (!order || order.status !== 'AGUARDANDO_ASSINATURA_ISABEL' || this.actionLoading()) {
+    if (!order || order.status !== 'AGUARDANDO_ASSINATURA_GERENTE_ESTOQUE' || this.actionLoading()) {
       return;
     }
 
@@ -175,104 +150,24 @@ export class ApprovalsPage implements OnDestroy {
       .pipe(finalize(() => this.actionLoading.set(false)))
       .subscribe({
         next: (response) => {
-          const isForwardedToStock = response.order.status === 'AGUARDANDO_ASSINATURA_GERENTE_ESTOQUE';
+          const isDone = response.order.status === 'CONCLUIDO' || response.order.status === 'FATURADO';
           const warning =
             response.failedEmails > 0
               ? ` ${response.failedEmails} falha(s) de e-mail na distribuição.`
               : '';
           this.toastMessage.set(
-            isForwardedToStock
-              ? `Pedido ${order.orderNumber} encaminhado para assinatura do gerente de estoque.` + warning
+            isDone
+              ? `Pedido ${order.orderNumber} finalizado pelo estoque e liberado para entrega.` + warning
               : `Etapa assinada. Pedido agora está em ${this.statusLabel(response.order.status)}.` + warning
           );
+          if (isDone) {
+            this.downloadOrderById(order.id, `${order.orderNumber}-concluido-estoque.pdf`);
+          }
           this.closeDecisionModal();
           this.loadData();
         },
         error: (error: { error?: { detail?: string }; message?: string }) => {
           const detail = error.error?.detail ?? error.message ?? 'Falha ao assinar pedido.';
-          this.errorMessage.set(String(detail));
-        }
-      });
-  }
-
-  returnSelectedOrder(): void {
-    const order = this.selectedOrder();
-    if (!order || order.status !== 'AGUARDANDO_ASSINATURA_ISABEL' || this.actionLoading()) {
-      return;
-    }
-    if (this.returnForm.invalid) {
-      this.returnForm.markAllAsTouched();
-      return;
-    }
-    const reason = this.returnForm.getRawValue().reason.trim();
-
-    this.actionLoading.set(true);
-    this.errorMessage.set(null);
-    this.toastMessage.set(null);
-    this.pedidoService
-      .returnOrder(order.id, reason)
-      .pipe(finalize(() => this.actionLoading.set(false)))
-      .subscribe({
-        next: () => {
-          this.toastMessage.set('Pedido devolvido para revisão com justificativa registrada.');
-          this.closeDecisionModal();
-          this.loadData();
-        },
-        error: (error: { error?: { detail?: string }; message?: string }) => {
-          const detail = error.error?.detail ?? error.message ?? 'Falha ao devolver pedido.';
-          this.errorMessage.set(String(detail));
-        }
-      });
-  }
-
-  canDelete(order: ApprovalOrderItem): boolean {
-    if (!this.isOperationalUser() || order.status === 'EXCLUIDO') {
-      return false;
-    }
-    if (
-      order.status === 'AGUARDANDO_ASSINATURA_ISABEL' ||
-      order.status === 'ASSINADO_AGUARDANDO_DISTRIBUICAO' ||
-      order.status === 'CONCLUIDO' ||
-      order.status === 'FATURADO' ||
-      !!order.signedAt
-    ) {
-      return false;
-    }
-    return true;
-  }
-
-  deleteOrder(order: ApprovalOrderItem): void {
-    if (!this.canDelete(order)) {
-      this.errorMessage.set('Somente Marcos e Isabel podem excluir solicitações.');
-      return;
-    }
-    if (this.actionLoading()) {
-      return;
-    }
-
-    const accepted = window.confirm(
-      `Excluir a solicitação ${order.orderNumber} de ${order.customerName}? Esta ação remove o item da fila de Aprovações.`
-    );
-    if (!accepted) {
-      return;
-    }
-
-    this.actionLoading.set(true);
-    this.errorMessage.set(null);
-    this.toastMessage.set(null);
-    this.pedidoService
-      .deleteOrder(order.id)
-      .pipe(finalize(() => this.actionLoading.set(false)))
-      .subscribe({
-        next: () => {
-          if (this.selectedOrder()?.id === order.id) {
-            this.closeDecisionModal();
-          }
-          this.toastMessage.set(`Solicitação ${order.orderNumber} excluída com sucesso.`);
-          this.loadData();
-        },
-        error: (error: { error?: { detail?: string }; message?: string }) => {
-          const detail = error.error?.detail ?? error.message ?? 'Falha ao excluir solicitação.';
           this.errorMessage.set(String(detail));
         }
       });
@@ -476,7 +371,7 @@ export class ApprovalsPage implements OnDestroy {
     this.errorMessage.set(null);
     const filters = this.filtersForm.getRawValue();
     this.pedidoService
-      .listStatus({
+      .listStockQueue({
         customer: filters.customer || '',
         dateFrom: filters.dateFrom || '',
         dateTo: filters.dateTo || '',
@@ -489,7 +384,7 @@ export class ApprovalsPage implements OnDestroy {
           this.syncSelectedOrderFromLiveData(response.items);
         },
         error: (error: { error?: { detail?: string }; message?: string }) => {
-          const detail = error.error?.detail ?? error.message ?? 'Falha ao carregar aprovações.';
+          const detail = error.error?.detail ?? error.message ?? 'Falha ao carregar fila de estoque.';
           this.errorMessage.set(String(detail));
         }
       });
@@ -529,7 +424,7 @@ export class ApprovalsPage implements OnDestroy {
     this.liveRefreshBusy = true;
     const filters = this.filtersForm.getRawValue();
     this.pedidoService
-      .listStatus({
+      .listStockQueue({
         customer: filters.customer || '',
         dateFrom: filters.dateFrom || '',
         dateTo: filters.dateTo || '',
@@ -559,11 +454,11 @@ export class ApprovalsPage implements OnDestroy {
     const updated = items.find((item) => item.id === selected.id);
     if (!updated) {
       this.closeDecisionModal();
-      this.toastMessage.set(`Pedido ${selected.orderNumber} saiu da fila de aprovações.`);
+      this.toastMessage.set(`Pedido ${selected.orderNumber} saiu da fila de estoque.`);
       return;
     }
     this.selectedOrder.set(updated);
-    if (this.decisionModalOpen() && updated.status !== 'AGUARDANDO_ASSINATURA_ISABEL') {
+    if (this.decisionModalOpen() && updated.status !== 'AGUARDANDO_ASSINATURA_GERENTE_ESTOQUE') {
       this.closeDecisionModal();
       this.toastMessage.set(
         `Pedido ${updated.orderNumber} atualizado para ${this.statusLabel(updated.status)}.`
@@ -629,6 +524,39 @@ export class ApprovalsPage implements OnDestroy {
       });
   }
 
+  private resolveCycleEndDate(order: ApprovalOrderItem): number | null {
+    const isClosed = order.status === 'CONCLUIDO' || order.status === 'FATURADO';
+    if (!isClosed) {
+      return null;
+    }
+    const finalStamp = this.parseIsoDate(order.signedAt);
+    return finalStamp ? finalStamp.getTime() : null;
+  }
+
+  private parseIsoDate(value: string | null | undefined): Date | null {
+    const raw = String(value || '').trim();
+    if (!raw) {
+      return null;
+    }
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) {
+      return null;
+    }
+    return parsed;
+  }
+
+  private formatDuration(totalMs: number): string {
+    const totalSeconds = Math.floor(totalMs / 1000);
+    const days = Math.floor(totalSeconds / 86400);
+    const hours = Math.floor((totalSeconds % 86400) / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (days > 0) {
+      return `${days}d ${String(hours).padStart(2, '0')}h ${String(minutes).padStart(2, '0')}m`;
+    }
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+
   private resetCanvas(): void {
     const canvas = this.signaturePad?.nativeElement;
     if (!canvas) {
@@ -685,39 +613,6 @@ export class ApprovalsPage implements OnDestroy {
     URL.revokeObjectURL(url);
   }
 
-  private resolveCycleEndDate(order: ApprovalOrderItem): number | null {
-    const isClosed = order.status === 'CONCLUIDO' || order.status === 'FATURADO';
-    if (!isClosed) {
-      return null;
-    }
-    const finalStamp = this.parseIsoDate(order.signedAt);
-    return finalStamp ? finalStamp.getTime() : null;
-  }
-
-  private parseIsoDate(value: string | null | undefined): Date | null {
-    const raw = String(value || '').trim();
-    if (!raw) {
-      return null;
-    }
-    const parsed = new Date(raw);
-    if (Number.isNaN(parsed.getTime())) {
-      return null;
-    }
-    return parsed;
-  }
-
-  private formatDuration(totalMs: number): string {
-    const totalSeconds = Math.floor(totalMs / 1000);
-    const days = Math.floor(totalSeconds / 86400);
-    const hours = Math.floor((totalSeconds % 86400) / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-    if (days > 0) {
-      return `${days}d ${String(hours).padStart(2, '0')}h ${String(minutes).padStart(2, '0')}m`;
-    }
-    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-  }
-
   private signatureStorageKey(): string | null {
     const user = this.auth.currentUser();
     if (!user) {
@@ -735,3 +630,4 @@ export class ApprovalsPage implements OnDestroy {
     this.hasSavedSignature.set(!!localStorage.getItem(storageKey));
   }
 }
+

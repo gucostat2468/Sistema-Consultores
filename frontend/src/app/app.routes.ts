@@ -5,7 +5,8 @@ import {
   approvalsAccessGuard,
   financialReceiptsAccessGuard,
   operationalAccessGuard,
-  statusAccessGuard
+  statusAccessGuard,
+  stockManagerAccessGuard
 } from './features/pedidos/guards/auth.guard';
 
 export const routes: Routes = [
@@ -75,6 +76,14 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./features/pedidos/pages/approvals/approvals.page').then(
             (m) => m.ApprovalsPage
+          )
+      },
+      {
+        path: 'estoque',
+        canActivate: [stockManagerAccessGuard],
+        loadComponent: () =>
+          import('./features/pedidos/pages/stock-manager/stock-manager.page').then(
+            (m) => m.StockManagerPage
           )
       },
       {

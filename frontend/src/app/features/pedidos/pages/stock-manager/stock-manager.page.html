@@ -1,22 +1,22 @@
 @if (loading()) {
   <section class="card state">
-    <p>Carregando sessão Aprovações...</p>
+    <p>Carregando sessão Estoque...</p>
   </section>
 } @else {
   <section class="card intro">
-    <h2>Aprovações da Isabel</h2>
-    <p>Assine os pedidos que já passaram pela assinatura do Marcos e encaminhe para a etapa final do estoque.</p>
-    <p>Atualização automática em tempo real para receber pedidos assinados pelo Marcos sem atraso.</p>
+    <h2>Fila do Gerente de Estoque</h2>
+    <p>Pedidos já assinados pelo Diretor Comercial e pela Isabel aguardando liberação final para entrega.</p>
+    <p>Esta sessão é exclusiva do gerente de estoque para manter o controle organizado da etapa final.</p>
   </section>
 
   <section class="summary-grid">
     <article class="card summary-card">
-      <p>Pendentes da Isabel</p>
+      <p>Pendentes no estoque</p>
       <strong>{{ pendingItems().length }}</strong>
     </article>
     <article class="card summary-card">
-      <p>Encaminhados ao estoque</p>
-      <strong>{{ forwardedToStockItems().length }}</strong>
+      <p>Concluídos no ciclo</p>
+      <strong>{{ completedItems().length }}</strong>
     </article>
   </section>
 
@@ -55,7 +55,7 @@
   }
 
   <section class="card table-card">
-    <h3>Fila de assinatura da Isabel</h3>
+    <h3>Assinatura final para entrega</h3>
     <table class="mobile-stack">
       <thead>
         <tr>
@@ -70,7 +70,7 @@
       </thead>
       <tbody>
         @if (pendingItems().length === 0) {
-          <tr><td colspan="7">Nenhum pedido pendente para assinatura da Isabel.</td></tr>
+          <tr><td colspan="7">Nenhum pedido aguardando assinatura do estoque.</td></tr>
         } @else {
           @for (item of pendingItems(); track item.id) {
             <tr>
@@ -82,25 +82,8 @@
               <td data-label="Tempo de ciclo">{{ cycleElapsedLabel(item) }}</td>
               <td data-label="Ações">
                 <div class="row-actions">
-                  <button type="button" (click)="openDecisionModal(item)">Assinar e enviar para estoque</button>
+                  <button type="button" (click)="openDecisionModal(item)">Assinar e concluir</button>
                   <button type="button" class="ghost" (click)="downloadOrder(item)">Download</button>
-                  @if (canDelete(item)) {
-                    <button
-                      type="button"
-                      class="icon-button trash"
-                      [disabled]="actionLoading()"
-                      title="Excluir solicitação"
-                      aria-label="Excluir solicitação"
-                      (click)="deleteOrder(item)"
-                    >
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path
-                          d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"
-                          fill="currentColor"
-                        />
-                      </svg>
-                    </button>
-                  }
                 </div>
               </td>
             </tr>
@@ -201,7 +184,7 @@
           </section>
 
           <section class="signature-block">
-            <h4>Assinatura da Isabel</h4>
+            <h4>Assinatura do Gerente de Estoque</h4>
             <p>Modo ativo: <strong>{{ signatureMode().toUpperCase() }}</strong></p>
 
             @if (signatureMode() === 'canvas') {
@@ -245,13 +228,6 @@
             }
           </section>
 
-          <section class="return-block" [formGroup]="returnForm">
-            <label>
-              Justificativa de devolução
-              <textarea formControlName="reason" rows="4"></textarea>
-            </label>
-          </section>
-
           <div class="actions">
             <button type="button" class="ghost" (click)="downloadManualSignedPreview(order)" [disabled]="manualSigning()">
               @if (manualSigning()) {
@@ -260,14 +236,11 @@
                 Prévia assinada
               }
             </button>
-            <button type="button" class="warn" (click)="returnSelectedOrder()" [disabled]="actionLoading()">
-              Devolver para revisão
-            </button>
             <button type="button" (click)="signSelectedOrder()" [disabled]="actionLoading()">
               @if (actionLoading()) {
                 Processando...
               } @else {
-                Assinar e enviar para estoque
+                Assinar e concluir entrega
               }
             </button>
           </div>
@@ -276,3 +249,4 @@
     </article>
   </section>
 }
+

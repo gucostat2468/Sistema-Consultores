@@ -67,6 +67,7 @@
           <th>Consultor</th>
           <th>Status</th>
           <th>Responsável pela assinatura</th>
+          <th>Tempo de ciclo</th>
           <th>Assinado em</th>
           <th>Criado em</th>
           <th>Atualizado em</th>
@@ -75,7 +76,7 @@
       </thead>
       <tbody>
         @if (items().length === 0) {
-          <tr><td colspan="10">Nenhum pedido concluído encontrado para os filtros atuais.</td></tr>
+          <tr><td colspan="11">Nenhum pedido concluído encontrado para os filtros atuais.</td></tr>
         } @else {
           @for (item of items(); track item.id) {
             <tr>
@@ -85,6 +86,7 @@
               <td data-label="Consultor">{{ item.consultantName || '-' }}</td>
               <td data-label="Status">{{ statusLabel(item.status) }}</td>
               <td data-label="Responsável">{{ signatureResponsibleLabel(item) }}</td>
+              <td data-label="Tempo de ciclo">{{ cycleElapsedLabel(item) }}</td>
               <td data-label="Assinado em">{{ formatDateTime(item.signedAt) }}</td>
               <td data-label="Criado em">{{ formatDateTime(item.createdAt) }}</td>
               <td data-label="Atualizado em">{{ formatDateTime(item.updatedAt) }}</td>
@@ -169,6 +171,7 @@
             <p><strong>Consultor:</strong> {{ order.consultantName || '-' }}</p>
             <p><strong>Solicitante:</strong> {{ order.requestedByName || '-' }}</p>
             <p><strong>Responsável pela assinatura:</strong> {{ signatureResponsibleLabel(order) }}</p>
+            <p><strong>Tempo de ciclo:</strong> {{ cycleElapsedLabel(order) }}</p>
             <p><strong>Assinado em:</strong> {{ formatDateTime(order.signedAt) }}</p>
             <p><strong>Criado em:</strong> {{ formatDateTime(order.createdAt) }}</p>
             <p><strong>Atualizado em:</strong> {{ formatDateTime(order.updatedAt) }}</p>

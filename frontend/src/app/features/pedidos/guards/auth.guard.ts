@@ -43,6 +43,17 @@ function getFinancialUsernames(): string[] {
     .filter(Boolean);
 }
 
+function getStockManagerUsernames(): string[] {
+  return (
+    (environment as { stockManagerUsernames?: string[] }).stockManagerUsernames ?? [
+      'gerente_estoque',
+      'estoque'
+    ]
+  )
+    .map((item) => String(item || '').trim().toLowerCase())
+    .filter(Boolean);
+}
+
 export const statusAccessGuard: CanActivateFn = () => {
   const auth = inject(AuthService);
   const router = inject(Router);
@@ -107,6 +118,22 @@ export const financialReceiptsAccessGuard: CanActivateFn = () => {
   const isAllowedUser =
     getFinancialUsernames().includes(username) || getOperationalUsernames().includes(username);
   if (isAllowedUser) {
+    return true;
+  }
+  return router.createUrlTree(['/app/dashboard']);
+};
+
+export const stockManagerAccessGuard: CanActivateFn = () => {
+  const auth = inject(AuthService);
+  const router = inject(Router);
+  const user = auth.currentUser();
+
+  if (!user) {
+    return router.createUrlTree(['/login']);
+  }
+
+  const username = String(user.username || '').trim().toLowerCase();
+  if (getStockManagerUsernames().includes(username)) {
     return true;
   }
   return router.createUrlTree(['/app/dashboard']);

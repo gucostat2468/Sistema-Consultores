@@ -7,6 +7,7 @@ import { finalize } from 'rxjs/operators';
 import { ApprovalOrderItem, OrderStatusDetail, PedidoService } from '../../services/pedido.service';
 
 const LIVE_REFRESH_INTERVAL_MS = 2500;
+const ELAPSED_TICK_MS = 1000;
 const HISTORY_QUERY_LIMIT = 20000;
 const HISTORY_TIME_ZONE = 'America/Sao_Paulo';
 
@@ -36,6 +37,7 @@ export class FinancialReceiptsPage implements OnDestroy {
   readonly previewUrl = signal<SafeResourceUrl | null>(null);
   readonly analysisPreviewUrl = signal<SafeResourceUrl | null>(null);
   readonly decisionEvents = signal<OrderStatusDetail['events']>([]);
+  readonly elapsedNow = signal(Date.now());
 
   readonly customerFilter = signal('');
   readonly dateFrom = signal('');
@@ -59,6 +61,7 @@ export class FinancialReceiptsPage implements OnDestroy {
   private previewObjectUrl: string | null = null;
   private analysisPreviewObjectUrl: string | null = null;
   private liveRefreshHandle: ReturnType<typeof setInterval> | null = null;
+  private elapsedClockHandle: ReturnType<typeof setInterval> | null = null;
   private liveRefreshBusy = false;
   private readonly dateFormatter = new Intl.DateTimeFormat('en-CA', {
     timeZone: HISTORY_TIME_ZONE,
@@ -80,10 +83,12 @@ export class FinancialReceiptsPage implements OnDestroy {
   constructor() {
     this.load();
     this.startLiveRefresh();
+    this.startElapsedClock();
   }
 
   ngOnDestroy(): void {
     this.stopLiveRefresh();
+    this.stopElapsedClock();
     this.revokePreview();
   }
 
@@ -206,6 +211,17 @@ export class FinancialReceiptsPage implements OnDestroy {
     return text || null;
   }
 
+  cycleElapsedLabel(order: ApprovalOrderItem): string {
+    const startedAt = this.parseAnyDate(order.createdAt);
+    if (!startedAt) {
+      return '-';
+    }
+    const finalStamp = this.resolveCycleEndDate(order);
+    const endDate = finalStamp ?? new Date(this.elapsedNow());
+    const elapsedMs = Math.max(0, endDate.getTime() - startedAt.getTime());
+    return this.formatDuration(elapsedMs);
+  }
+
   statusLabel(status: ApprovalOrderItem['status'] | string): string {
     if (status === 'CONCLUIDO' || status === 'FATURADO') {
       return 'Concluído';
@@ -215,6 +231,9 @@ export class FinancialReceiptsPage implements OnDestroy {
     }
     if (status === 'AGUARDANDO_ASSINATURA_ISABEL') {
       return 'Aguardando Isabel';
+    }
+    if (status === 'AGUARDANDO_ASSINATURA_GERENTE_ESTOQUE') {
+      return 'Aguardando Gerente de Estoque';
     }
     if (status === 'NEGADO_SEM_LIMITE') {
       return 'Negado sem limite';
@@ -272,6 +291,18 @@ export class FinancialReceiptsPage implements OnDestroy {
     if (this.liveRefreshHandle) {
       clearInterval(this.liveRefreshHandle);
       this.liveRefreshHandle = null;
+    }
+  }
+
+  private startElapsedClock(): void {
+    this.stopElapsedClock();
+    this.elapsedClockHandle = setInterval(() => this.elapsedNow.set(Date.now()), ELAPSED_TICK_MS);
+  }
+
+  private stopElapsedClock(): void {
+    if (this.elapsedClockHandle) {
+      clearInterval(this.elapsedClockHandle);
+      this.elapsedClockHandle = null;
     }
   }
 
@@ -505,5 +536,25 @@ export class FinancialReceiptsPage implements OnDestroy {
     }
 
     return null;
+  }
+
+  private resolveCycleEndDate(order: ApprovalOrderItem): Date | null {
+    const isClosed = order.status === 'CONCLUIDO' || order.status === 'FATURADO';
+    if (!isClosed) {
+      return null;
+    }
+    return this.parseAnyDate(order.signedAt);
+  }
+
+  private formatDuration(totalMs: number): string {
+    const totalSeconds = Math.floor(totalMs / 1000);
+    const days = Math.floor(totalSeconds / 86400);
+    const hours = Math.floor((totalSeconds % 86400) / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (days > 0) {
+      return `${days}d ${String(hours).padStart(2, '0')}h ${String(minutes).padStart(2, '0')}m`;
+    }
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
   }
 }
