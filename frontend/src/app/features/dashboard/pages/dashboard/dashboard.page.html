@@ -24,23 +24,43 @@
     <section class="kpi-grid">
       <article class="kpi">
         <p>Saldo em aberto</p>
-        <h3>{{ currency(metrics.totalBalance) }}</h3>
+        <h3 class="kpi-value" [attr.title]="currency(metrics.totalBalance)">
+          {{ currencyForKpi(metrics.totalBalance) }}
+        </h3>
+        @if (isCompactKpiCurrency(metrics.totalBalance)) {
+          <span class="kpi-note">{{ currency(metrics.totalBalance) }}</span>
+        }
       </article>
       <article class="kpi">
         <p>Vence em 7 dias</p>
-        <h3>{{ currency(metrics.due7) }}</h3>
+        <h3 class="kpi-value" [attr.title]="currency(metrics.due7)">
+          {{ currencyForKpi(metrics.due7) }}
+        </h3>
+        @if (isCompactKpiCurrency(metrics.due7)) {
+          <span class="kpi-note">{{ currency(metrics.due7) }}</span>
+        }
       </article>
       <article class="kpi">
         <p>Vence em 30 dias</p>
-        <h3>{{ currency(metrics.due30) }}</h3>
+        <h3 class="kpi-value" [attr.title]="currency(metrics.due30)">
+          {{ currencyForKpi(metrics.due30) }}
+        </h3>
+        @if (isCompactKpiCurrency(metrics.due30)) {
+          <span class="kpi-note">{{ currency(metrics.due30) }}</span>
+        }
       </article>
       <article class="kpi">
         <p>Saldo vencido</p>
-        <h3>{{ currency(metrics.overdue) }}</h3>
+        <h3 class="kpi-value" [attr.title]="currency(metrics.overdue)">
+          {{ currencyForKpi(metrics.overdue) }}
+        </h3>
+        @if (isCompactKpiCurrency(metrics.overdue)) {
+          <span class="kpi-note">{{ currency(metrics.overdue) }}</span>
+        }
       </article>
       <article class="kpi">
         <p>Clientes / Titulos</p>
-        <h3>{{ metrics.clients }} / {{ metrics.titles }}</h3>
+        <h3 class="kpi-value">{{ metrics.clients }} / {{ metrics.titles }}</h3>
       </article>
     </section>
 

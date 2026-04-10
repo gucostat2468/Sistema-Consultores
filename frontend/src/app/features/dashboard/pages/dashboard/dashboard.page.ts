@@ -33,6 +33,14 @@ export class DashboardPage {
   private readonly route = inject(ActivatedRoute);
   private readonly dashboardService = inject(DashboardService);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly kpiCompactThreshold = 1_000_000_000_000;
+  private readonly compactCurrencyFormatter = new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+    notation: 'compact',
+    compactDisplay: 'short',
+    maximumFractionDigits: 2
+  });
 
   readonly loading = signal(true);
   readonly error = signal<string | null>(null);
@@ -218,6 +226,19 @@ export class DashboardPage {
 
   currency(value: number): string {
     return toCurrency(value);
+  }
+
+  currencyForKpi(value: number): string {
+    const amount = Number(value) || 0;
+    if (Math.abs(amount) >= this.kpiCompactThreshold) {
+      return this.compactCurrencyFormatter.format(amount);
+    }
+    return this.currency(amount);
+  }
+
+  isCompactKpiCurrency(value: number): boolean {
+    const amount = Number(value) || 0;
+    return Math.abs(amount) >= this.kpiCompactThreshold;
   }
 
   percent(value: number): string {

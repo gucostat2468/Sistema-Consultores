@@ -57,6 +57,9 @@
   padding: 0.95rem;
   background: linear-gradient(180deg, #fff 0%, #fcfaf6 100%);
   box-shadow: var(--shadow-sm);
+  min-height: 102px;
+  display: flex;
+  flex-direction: column;
 }
 
 .kpi p {
@@ -65,10 +68,20 @@
   font-size: 0.85rem;
 }
 
-.kpi h3 {
+.kpi-value {
   margin: 0.45rem 0 0;
-  font-size: 1.35rem;
+  font-size: clamp(1.05rem, 1.25vw, 1.35rem);
+  line-height: 1.22;
   font-family: var(--font-heading);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.kpi-note {
+  margin-top: 0.22rem;
+  color: var(--text-soft);
+  font-size: 0.72rem;
+  line-height: 1.2;
 }
 
 .strategy {

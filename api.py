@@ -86,6 +86,11 @@ DEFAULT_VITOR_FINANCIAL_PASSWORD = os.getenv("VITOR_FINANCIAL_PASSWORD", "dronep
 STOCK_MANAGER_USERNAME = os.getenv("STOCK_MANAGER_USERNAME", "gerente_estoque").strip().lower()
 DEFAULT_STOCK_MANAGER_PASSWORD = os.getenv("STOCK_MANAGER_PASSWORD", DEFAULT_ORDER_ADMIN_PASSWORD)
 DEFAULT_REPORT_CONSULTANT = "CARTEIRA GERAL (SEM CONSULTOR)"
+# Evita que valores absurdos (normalmente erro de parsing) distorcam os KPIs.
+# Limite padrao: R$ 1 bilhao por titulo (em centavos).
+MAX_REASONABLE_RECEIVABLE_CENTS = int(
+    os.getenv("MAX_REASONABLE_RECEIVABLE_CENTS", str(1_000_000_000 * 100))
+)
 TOKEN_STORE: dict[str, AuthenticatedUser] = {}
 AUTH_JWT_ALGORITHM = "HS256"
 AUTH_JWT_SECRET = os.getenv("AUTH_JWT_SECRET", "trocar-token-em-producao")
@@ -647,6 +652,20 @@ def rows_to_dataframe(rows: list[dict]) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()
     return pd.DataFrame(rows)
+
+
+def filter_suspect_receivable_rows(rows: list[dict]) -> list[dict]:
+    filtered: list[dict] = []
+    for row in rows:
+        balance_cents = int(row.get("balance_cents") or 0)
+        installment_cents = int(row.get("installment_value_cents") or 0)
+        if (
+            abs(balance_cents) > MAX_REASONABLE_RECEIVABLE_CENTS
+            or abs(installment_cents) > MAX_REASONABLE_RECEIVABLE_CENTS
+        ):
+            continue
+        filtered.append(row)
+    return filtered
 
 
 def map_financial_status(status: str) -> str:
@@ -2569,6 +2588,7 @@ def dashboard_receivables(
 ) -> list[dict]:
     user = get_current_user_from_header(authorization)
     rows = fetch_receivables_for_user(user=user, selected_consultant_id=consultantId)
+    rows = filter_suspect_receivable_rows(rows)
     return build_receivables_for_api(rows)
 
 
@@ -2579,6 +2599,7 @@ def dashboard_summary(
 ) -> dict:
     user = get_current_user_from_header(authorization)
     rows = fetch_receivables_for_user(user=user, selected_consultant_id=consultantId)
+    rows = filter_suspect_receivable_rows(rows)
     df = rows_to_dataframe(rows)
     return build_summary_for_api(df)
 
@@ -2590,6 +2611,7 @@ def dashboard_client_health(
 ) -> list[dict]:
     user = get_current_user_from_header(authorization)
     rows = fetch_receivables_for_user(user=user, selected_consultant_id=consultantId)
+    rows = filter_suspect_receivable_rows(rows)
     credit_rows = fetch_credit_limits_for_user(user=user, selected_consultant_id=consultantId)
     customer_rows = fetch_consultant_customers_for_user(user=user, selected_consultant_id=consultantId)
     df = rows_to_dataframe(rows)
@@ -2608,6 +2630,7 @@ def dashboard_credit_limits(
     user = get_current_user_from_header(authorization)
     credit_rows = fetch_credit_limits_for_user(user=user, selected_consultant_id=consultantId)
     receivable_rows = fetch_receivables_for_user(user=user, selected_consultant_id=consultantId)
+    receivable_rows = filter_suspect_receivable_rows(receivable_rows)
     return build_credit_limits_for_api(credit_rows=credit_rows, receivable_rows=receivable_rows)
 
 

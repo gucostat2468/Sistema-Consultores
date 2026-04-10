@@ -156,6 +156,10 @@ HEADER_ALIASES: dict[str, set[str]] = {
     },
 }
 
+# Guard rail para evitar interpretar identificadores (ex.: CNPJ) como valor monetario.
+# Limite padrao: R$ 1 bilhao por titulo (em centavos).
+MAX_REASONABLE_MONEY_CENTS = int(1_000_000_000 * 100)
+
 
 def parse_receivables_excel(
     path: str | Path,
@@ -352,6 +356,11 @@ def infer_headerless_column_map(row_values: list[object]) -> dict[str, int] | No
     if customer_idx is None:
         return None
 
+    # Sem data/documento/status, o risco de falso positivo (abas nao financeiras)
+    # aumenta bastante.
+    if date_idx is None and document_idx is None and status_idx is None:
+        return None
+
     mapped: dict[str, int] = {
         "customerName": customer_idx,
         "installmentValue": amount_idx,
@@ -487,10 +496,14 @@ def detect_receivables_header_row(row_values: list[object]) -> dict[str, object]
                 mapped[field] = idx
                 break
 
-    # Aceita layout minimo (cliente + valor), com vencimento opcional.
+    # Exige sinal minimo de contexto de recebiveis para evitar capturar
+    # abas de credito/limite como se fossem titulos.
     required = {"customerName"}
     has_amount = "balance" in mapped or "installmentValue" in mapped
-    if required.issubset(mapped.keys()) and has_amount:
+    has_receivable_context = any(
+        field in mapped for field in {"dueDate", "documentRef", "issueDate", "installment", "status"}
+    )
+    if required.issubset(mapped.keys()) and has_amount and has_receivable_context:
         signature = "|".join([header for header in normalized_headers if header])
         return {
             "columns": mapped,
@@ -564,7 +577,10 @@ def parse_money_to_cents(value: object) -> int | None:
 
     if isinstance(value, (int, float, Decimal)):
         decimal_value = Decimal(str(value))
-        return int((decimal_value * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        cents = int((decimal_value * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        if abs(cents) > MAX_REASONABLE_MONEY_CENTS:
+            return None
+        return cents
 
     text = clean_text(value)
     if not text:
@@ -582,7 +598,10 @@ def parse_money_to_cents(value: object) -> int | None:
         decimal_value = Decimal(normalized)
     except InvalidOperation:
         return None
-    return int((decimal_value * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    cents = int((decimal_value * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    if abs(cents) > MAX_REASONABLE_MONEY_CENTS:
+        return None
+    return cents
 
 
 def to_iso_date(value: object) -> str | None:
